@@ -1,3 +1,4 @@
+mod pipeline;
 mod cli;
 mod io;
 mod model;
