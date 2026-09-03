@@ -1,4 +1,6 @@
 # DataPipe (`dp`)
+[![Crates.io](https://img.shields.io/crates/v/datapipe-cli.svg)](https://crates.io/crates/datapipe-cli)
+
 
 DataPipe is a streaming-first, Unix-inspired CLI for processing structured data (JSON, CSV). 
 Instead of operating on raw text strings, `dp` operates on structured records natively, allowing you to filter, sort, aggregate, and transform gigabytes of data with strict O(1) memory bounds.
