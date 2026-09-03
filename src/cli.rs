@@ -25,15 +25,19 @@ pub enum Command {
     Schema,
     Inspect,
     Csv,
-    /// Group records by a field and compute aggregates
     Group {
-        /// The field to group by
         by: String,
-        /// Optional field to sum within each group
         #[arg(long)]
         sum: Option<String>,
-        /// Whether to count the number of records in each group
         #[arg(long)]
         count: bool,
+    },
+    /// Join the stream with another JSON/CSV file
+    Join {
+        /// The file to join with (must be .csv or .jsonl)
+        file: String,
+        /// The field to join on (must exist in both streams)
+        #[arg(long)]
+        on: String,
     }
 }

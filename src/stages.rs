@@ -343,3 +343,39 @@ impl Stage for GroupStage {
         Box::new(output.into_iter())
     }
 }
+
+pub struct JoinStage {
+    pub hash_map: std::sync::Arc<std::collections::HashMap<String, Record>>,
+    pub on: String,
+}
+
+impl Stage for JoinStage {
+    fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
+        let hash_map = std::sync::Arc::clone(&self.hash_map);
+        let on = self.on.clone();
+        
+        let iter = input.map(move |res| {
+            match res {
+                Ok(mut record) => {
+                    let join_key = match record.get(&on) {
+                        Some(Value::String(s)) => s.clone(),
+                        Some(val) => serde_json::to_string(val).unwrap_or_default(),
+                        None => return Ok(record),
+                    };
+                    
+                    if let Some(right_record) = hash_map.get(&join_key) {
+                        for (k, v) in right_record {
+                            if k != &on {
+                                record.insert(k.clone(), v.clone());
+                            }
+                        }
+                    }
+                    Ok(record)
+                },
+                Err(e) => Err(e),
+            }
+        });
+        
+        Box::new(iter)
+    }
+}

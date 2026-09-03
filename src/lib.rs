@@ -1,4 +1,3 @@
-pub mod par_iter;
 pub mod cli;
 pub mod error;
 pub mod expr;
@@ -6,6 +5,7 @@ pub mod io;
 pub mod model;
 pub mod pipeline;
 pub mod stages;
+pub mod par_iter;
 
 use clap::Parser;
 use cli::{Cli, Command};
@@ -47,6 +47,28 @@ pub fn run_cli() -> miette::Result<()> {
         Command::Max { field } => pipeline.add_stage(Box::new(MaxStage { field })),
         Command::Schema => pipeline.add_stage(Box::new(SchemaStage)),
         Command::Group { by, sum, count } => pipeline.add_stage(Box::new(GroupStage { by, sum, count })),
+        Command::Join { file, on } => {
+            let f = std::fs::File::open(&file).map_err(|e| miette::miette!("Failed to open join file: {}", e))?;
+            let reader = BufReader::new(f);
+            let join_records: crate::pipeline::RecordStream = if file.ends_with(".csv") {
+                Box::new(crate::io::read_csv_stream(reader).map_err(|e| miette::miette!(e.to_string()))?)
+            } else {
+                Box::new(crate::io::read_json_stream(reader))
+            };
+            
+            let mut hash_map = std::collections::HashMap::new();
+            for res in join_records {
+                if let Ok(rec) = res {
+                    let key = match rec.get(&on) {
+                        Some(crate::model::Value::String(s)) => s.clone(),
+                        Some(val) => serde_json::to_string(val).unwrap_or_default(),
+                        None => continue,
+                    };
+                    hash_map.insert(key, rec);
+                }
+            }
+            pipeline.add_stage(Box::new(JoinStage { hash_map: std::sync::Arc::new(hash_map), on }));
+        }
         Command::Inspect | Command::Csv => {}
     }
 
