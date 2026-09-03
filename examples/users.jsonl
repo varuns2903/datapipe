@@ -1,0 +1,5 @@
+{"id": 1, "name": "Alice", "age": 28, "admin": true}
+{"id": 2, "name": "Bob", "age": 19, "admin": false}
+{"id": 3, "name": "Charlie", "age": 35, "admin": true}
+{"id": 4, "name": "Diana", "age": 22, "admin": false}
+{"id": 5, "name": "Eve", "age": 42, "admin": true}

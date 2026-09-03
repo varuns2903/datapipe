@@ -1,0 +1,6 @@
+order_id,user_id,amount,status
+101,1,250.50,shipped
+102,2,45.00,processing
+103,1,99.99,shipped
+104,3,1200.00,delivered
+105,4,15.25,processing
