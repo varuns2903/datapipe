@@ -319,3 +319,72 @@ impl Stage for SchemaStage {
         Box::new(std::iter::once(Ok(result_rec)))
     }
 }
+
+pub struct GroupStage {
+    pub by: String,
+    pub sum: Option<String>,
+    pub count: bool,
+}
+
+impl Stage for GroupStage {
+    fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
+        let by = self.by.clone();
+        let sum_field = self.sum.clone();
+        let do_count = self.count;
+        
+        // We must buffer the groups
+        let mut groups: indexmap::IndexMap<String, (i64, f64, i64, bool)> = indexmap::IndexMap::new();
+        // The value tuple: (sum_int, sum_float, count, is_float)
+
+        for res in input {
+            if let Ok(rec) = res {
+                let group_key = match rec.get(&by) {
+                    Some(Value::String(s)) => s.clone(),
+                    Some(val) => serde_json::to_string(val).unwrap_or_default(),
+                    None => "null".to_string(),
+                };
+                
+                let entry = groups.entry(group_key).or_insert((0, 0.0, 0, false));
+                entry.2 += 1; // Increment count
+                
+                if let Some(ref field) = sum_field {
+                    if let Some(val) = rec.get(field) {
+                        match val {
+                            Value::Integer(i) => {
+                                if entry.3 { entry.1 += *i as f64; }
+                                else { entry.0 += i; }
+                            },
+                            Value::Float(f) => {
+                                if !entry.3 {
+                                    entry.3 = true;
+                                    entry.1 = entry.0 as f64;
+                                }
+                                entry.1 += f;
+                            },
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        
+        let mut output = Vec::new();
+        for (key, (sum_int, sum_float, count, is_float)) in groups {
+            let mut rec = indexmap::IndexMap::new();
+            rec.insert(by.clone(), Value::String(key));
+            
+            if do_count {
+                rec.insert("count".to_string(), Value::Integer(count));
+            }
+            
+            if let Some(ref field) = sum_field {
+                let final_sum = if is_float { Value::Float(sum_float) } else { Value::Integer(sum_int) };
+                rec.insert(format!("sum_{}", field), final_sum);
+            }
+            
+            output.push(Ok(rec));
+        }
+        
+        Box::new(output.into_iter())
+    }
+}

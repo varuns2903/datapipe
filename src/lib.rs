@@ -14,10 +14,8 @@ use std::io::{stdin, stdout, BufReader, BufWriter};
 
 pub fn run_cli() -> miette::Result<()> {
     let cli = Cli::parse();
-
     let stdin_handle = stdin();
     let reader = BufReader::new(stdin_handle.lock());
-    
     let stdout_handle = stdout();
     let writer = BufWriter::new(stdout_handle.lock());
 
@@ -33,11 +31,7 @@ pub fn run_cli() -> miette::Result<()> {
     match cli.command {
         Command::Filter { expression } => {
             let ast = crate::expr::parse(&expression).map_err(|e| {
-                if let Ok(diag) = e.downcast::<crate::error::DataPipeError>() {
-                    diag.into()
-                } else {
-                    miette::miette!("Failed to parse expression")
-                }
+                if let Ok(diag) = e.downcast::<crate::error::DataPipeError>() { diag.into() } else { miette::miette!("Failed to parse expression") }
             })?;
             pipeline.add_stage(Box::new(FilterStage { ast }));
         }
@@ -51,16 +45,15 @@ pub fn run_cli() -> miette::Result<()> {
         Command::Min { field } => pipeline.add_stage(Box::new(MinStage { field })),
         Command::Max { field } => pipeline.add_stage(Box::new(MaxStage { field })),
         Command::Schema => pipeline.add_stage(Box::new(SchemaStage)),
+        Command::Group { by, sum, count } => pipeline.add_stage(Box::new(GroupStage { by, sum, count })),
         Command::Inspect | Command::Csv => {}
     }
 
     let result_stream = pipeline.process(records);
-
     if is_csv_out {
         crate::io::write_csv_stream(writer, result_stream).map_err(|e| miette::miette!(e.to_string()))?;
     } else {
         crate::io::write_json_stream(writer, result_stream).map_err(|e| miette::miette!(e.to_string()))?;
     }
-
     Ok(())
 }
