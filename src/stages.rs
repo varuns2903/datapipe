@@ -263,3 +263,42 @@ impl Stage for MaxStage {
         Box::new(std::iter::once(Ok(result_rec)))
     }
 }
+
+pub struct SchemaStage;
+
+impl Stage for SchemaStage {
+    fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
+        let mut field_types: indexmap::IndexMap<String, std::collections::HashSet<String>> = indexmap::IndexMap::new();
+
+        for res in input.take(10_000) {
+            if let Ok(rec) = res {
+                for (key, val) in rec {
+                    let type_name = match val {
+                        Value::Null => "null",
+                        Value::Boolean(_) => "boolean",
+                        Value::Integer(_) => "integer",
+                        Value::Float(_) => "float",
+                        Value::String(_) => "string",
+                        Value::Array(_) => "array",
+                        Value::Object(_) => "object",
+                    };
+                    field_types.entry(key)
+                        .or_default()
+                        .insert(type_name.to_string());
+                }
+            }
+        }
+
+        let mut result_rec = indexmap::IndexMap::new();
+        for (field, types) in field_types {
+            let mut types_vec: Vec<_> = types.into_iter().collect();
+            types_vec.sort();
+            result_rec.insert(
+                field, 
+                Value::String(types_vec.join(" | "))
+            );
+        }
+
+        Box::new(std::iter::once(Ok(result_rec)))
+    }
+}

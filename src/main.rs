@@ -40,6 +40,7 @@ fn main() -> anyhow::Result<()> {
         Command::Avg { field } => pipeline.add_stage(Box::new(AvgStage { field })),
         Command::Min { field } => pipeline.add_stage(Box::new(MinStage { field })),
         Command::Max { field } => pipeline.add_stage(Box::new(MaxStage { field })),
+        Command::Schema => pipeline.add_stage(Box::new(SchemaStage)),
         Command::Inspect | Command::Csv => {}
     }
 

@@ -47,4 +47,6 @@ pub enum Command {
     },
     Inspect,
     Csv,
+    /// Infer and print the schema of the stream
+    Schema,
 }
