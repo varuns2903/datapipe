@@ -8,7 +8,7 @@ mod stages;
 use clap::Parser;
 use cli::{Cli, Command};
 use pipeline::Pipeline;
-use stages::{FilterStage, LimitStage, SelectStage};
+use stages::{FilterStage, LimitStage, SelectStage, SortStage, UniqueStage};
 use std::io::{stdin, stdout, BufReader, BufWriter};
 
 fn main() -> anyhow::Result<()> {
@@ -42,6 +42,12 @@ fn main() -> anyhow::Result<()> {
         }
         Command::Limit { max } => {
             pipeline.add_stage(Box::new(LimitStage { max }));
+        }
+        Command::Sort { field, desc } => {
+            pipeline.add_stage(Box::new(SortStage { field, desc }));
+        }
+        Command::Unique { field } => {
+            pipeline.add_stage(Box::new(UniqueStage { field }));
         }
         Command::Inspect | Command::Csv => {
             // No transformation stages added

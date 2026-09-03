@@ -29,6 +29,16 @@ pub enum Command {
     Limit {
         max: usize,
     },
+    /// Sort the stream by a field
+    Sort {
+        field: String,
+        #[arg(long)]
+        desc: bool,
+    },
+    /// Keep only the first record for each unique value of a field
+    Unique {
+        field: String,
+    },
     /// Stream and inspect data (Pass-through test)
     Inspect,
     /// Output the stream as CSV
