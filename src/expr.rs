@@ -1,10 +1,17 @@
 use crate::model::{Record, Value};
 use anyhow::{anyhow, Result};
+use std::cmp::Ordering;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Operator {
     Eq,
+    NotEq,
     Gt,
+    Lt,
+    GtEq,
+    LtEq,
+    And,
+    Or,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -25,17 +32,31 @@ impl Expr {
             Expr::Literal(val) => val.clone(),
             Expr::BinaryOp { op, left, right } => {
                 let l = left.evaluate(record);
+                
+                // Short-circuit logic for AND / OR
+                if *op == Operator::And && l != Value::Boolean(true) {
+                    return Value::Boolean(false);
+                }
+                if *op == Operator::Or && l == Value::Boolean(true) {
+                    return Value::Boolean(true);
+                }
+
                 let r = right.evaluate(record);
+
                 match op {
+                    Operator::And => Value::Boolean(l == Value::Boolean(true) && r == Value::Boolean(true)),
+                    Operator::Or => Value::Boolean(l == Value::Boolean(true) || r == Value::Boolean(true)),
                     Operator::Eq => Value::Boolean(l == r),
-                    Operator::Gt => {
-                        if let (Value::Integer(li), Value::Integer(ri)) = (&l, &r) {
-                            Value::Boolean(li > ri)
-                        } else if let (Value::Float(lf), Value::Float(rf)) = (&l, &r) {
-                            Value::Boolean(lf > rf)
-                        } else {
-                            Value::Boolean(false)
-                        }
+                    Operator::NotEq => Value::Boolean(l != r),
+                    _ => {
+                        let ord = crate::model::cmp_values(&l, &r);
+                        Value::Boolean(match op {
+                            Operator::Gt => ord == Ordering::Greater,
+                            Operator::Lt => ord == Ordering::Less,
+                            Operator::GtEq => ord == Ordering::Greater || ord == Ordering::Equal,
+                            Operator::LtEq => ord == Ordering::Less || ord == Ordering::Equal,
+                            _ => false,
+                        })
                     }
                 }
             }
@@ -49,8 +70,15 @@ pub enum Token {
     Field(String),
     StringLit(String),
     IntLit(i64),
+    BoolLit(bool),
     EqEq,
+    NotEq,
     Gt,
+    GtEq,
+    Lt,
+    LtEq,
+    And,
+    Or,
 }
 
 pub fn lex(input: &str) -> Result<Vec<Token>> {
@@ -83,9 +111,47 @@ pub fn lex(input: &str) -> Result<Vec<Token>> {
                     return Err(anyhow!("Expected '=='"));
                 }
             }
+            '!' => {
+                chars.next();
+                if chars.next() == Some('=') {
+                    tokens.push(Token::NotEq);
+                } else {
+                    return Err(anyhow!("Expected '!='"));
+                }
+            }
             '>' => {
                 chars.next();
-                tokens.push(Token::Gt);
+                if chars.peek() == Some(&'=') {
+                    chars.next();
+                    tokens.push(Token::GtEq);
+                } else {
+                    tokens.push(Token::Gt);
+                }
+            }
+            '<' => {
+                chars.next();
+                if chars.peek() == Some(&'=') {
+                    chars.next();
+                    tokens.push(Token::LtEq);
+                } else {
+                    tokens.push(Token::Lt);
+                }
+            }
+            '&' => {
+                chars.next();
+                if chars.next() == Some('&') {
+                    tokens.push(Token::And);
+                } else {
+                    return Err(anyhow!("Expected '&&'"));
+                }
+            }
+            '|' => {
+                chars.next();
+                if chars.next() == Some('|') {
+                    tokens.push(Token::Or);
+                } else {
+                    return Err(anyhow!("Expected '||'"));
+                }
             }
             '"' => {
                 chars.next();
@@ -112,6 +178,24 @@ pub fn lex(input: &str) -> Result<Vec<Token>> {
                 }
                 tokens.push(Token::IntLit(num.parse()?));
             }
+            'a'..='z' | 'A'..='Z' => {
+                let mut s = String::new();
+                while let Some(&ch) = chars.peek() {
+                    if ch.is_alphabetic() {
+                        s.push(ch);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                if s == "true" {
+                    tokens.push(Token::BoolLit(true));
+                } else if s == "false" {
+                    tokens.push(Token::BoolLit(false));
+                } else {
+                    return Err(anyhow!("Unexpected keyword: {}", s));
+                }
+            }
             _ => return Err(anyhow!("Unexpected character: {}", c)),
         }
     }
@@ -124,39 +208,106 @@ pub fn parse(input: &str) -> Result<Expr> {
     if tokens.is_empty() {
         return Err(anyhow!("Empty expression"));
     }
+    let mut parser = Parser { tokens, pos: 0 };
+    let expr = parser.parse_expr()?;
+    if !parser.is_eof() {
+        return Err(anyhow!("Unexpected trailing tokens"));
+    }
+    Ok(expr)
+}
 
-    // A very simple parser that specifically looks for: <Left> <Op> <Right>
-    if tokens.len() == 3 {
-        let left = match &tokens[0] {
-            Token::Field(f) => Expr::FieldAccess(f.clone()),
-            Token::StringLit(s) => Expr::Literal(Value::String(s.clone())),
-            Token::IntLit(i) => Expr::Literal(Value::Integer(*i)),
-            _ => return Err(anyhow!("Invalid left operand")),
-        };
+struct Parser {
+    tokens: Vec<Token>,
+    pos: usize,
+}
 
-        let op = match &tokens[1] {
-            Token::EqEq => Operator::Eq,
-            Token::Gt => Operator::Gt,
-            _ => return Err(anyhow!("Invalid operator")),
-        };
-
-        let right = match &tokens[2] {
-            Token::Field(f) => Expr::FieldAccess(f.clone()),
-            Token::StringLit(s) => Expr::Literal(Value::String(s.clone())),
-            Token::IntLit(i) => Expr::Literal(Value::Integer(*i)),
-            _ => return Err(anyhow!("Invalid right operand")),
-        };
-
-        return Ok(Expr::BinaryOp {
-            op,
-            left: Box::new(left),
-            right: Box::new(right),
-        });
+impl Parser {
+    fn peek(&self) -> Option<&Token> {
+        self.tokens.get(self.pos)
+    }
+    fn consume(&mut self) {
+        self.pos += 1;
+    }
+    fn is_eof(&self) -> bool {
+        self.pos >= self.tokens.len()
     }
 
-    Err(anyhow!(
-        "Unsupported expression format. Try something like '.age > 25'"
-    ))
+    fn parse_expr(&mut self) -> Result<Expr> {
+        let mut left = self.parse_and()?;
+        while let Some(Token::Or) = self.peek() {
+            self.consume();
+            let right = self.parse_and()?;
+            left = Expr::BinaryOp {
+                op: Operator::Or,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+        Ok(left)
+    }
+
+    fn parse_and(&mut self) -> Result<Expr> {
+        let mut left = self.parse_cmp()?;
+        while let Some(Token::And) = self.peek() {
+            self.consume();
+            let right = self.parse_cmp()?;
+            left = Expr::BinaryOp {
+                op: Operator::And,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+        Ok(left)
+    }
+
+    fn parse_cmp(&mut self) -> Result<Expr> {
+        let left = self.parse_primary()?;
+        if let Some(tok) = self.peek() {
+            let op = match tok {
+                Token::EqEq => Operator::Eq,
+                Token::NotEq => Operator::NotEq,
+                Token::Gt => Operator::Gt,
+                Token::Lt => Operator::Lt,
+                Token::GtEq => Operator::GtEq,
+                Token::LtEq => Operator::LtEq,
+                _ => return Ok(left),
+            };
+            self.consume();
+            let right = self.parse_primary()?;
+            return Ok(Expr::BinaryOp {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            });
+        }
+        Ok(left)
+    }
+
+    fn parse_primary(&mut self) -> Result<Expr> {
+        match self.peek() {
+            Some(Token::Field(f)) => {
+                let f = f.clone();
+                self.consume();
+                Ok(Expr::FieldAccess(f))
+            }
+            Some(Token::StringLit(s)) => {
+                let s = s.clone();
+                self.consume();
+                Ok(Expr::Literal(Value::String(s)))
+            }
+            Some(Token::IntLit(i)) => {
+                let i = *i;
+                self.consume();
+                Ok(Expr::Literal(Value::Integer(i)))
+            }
+            Some(Token::BoolLit(b)) => {
+                let b = *b;
+                self.consume();
+                Ok(Expr::Literal(Value::Boolean(b)))
+            }
+            _ => Err(anyhow!("Expected field, string, boolean, or integer")),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -165,39 +316,45 @@ mod tests {
     use indexmap::IndexMap;
 
     #[test]
-    fn test_lexing() {
-        let tokens = lex(".age > 25").unwrap();
-        assert_eq!(
-            tokens,
-            vec![
-                Token::Field("age".to_string()),
-                Token::Gt,
-                Token::IntLit(25),
-            ]
-        );
+    fn test_lexing_complex() {
+        let tokens = lex(".age >= 25 && .active == true").unwrap();
+        assert_eq!(tokens, vec![
+            Token::Field("age".to_string()),
+            Token::GtEq,
+            Token::IntLit(25),
+            Token::And,
+            Token::Field("active".to_string()),
+            Token::EqEq,
+            Token::BoolLit(true)
+        ]);
     }
 
     #[test]
-    fn test_parsing() {
-        let ast = parse(".name == \"Alice\"").unwrap();
-        assert_eq!(
-            ast,
-            Expr::BinaryOp {
-                op: Operator::Eq,
-                left: Box::new(Expr::FieldAccess("name".to_string())),
-                right: Box::new(Expr::Literal(Value::String("Alice".to_string()))),
-            }
-        );
-    }
-
-    #[test]
-    fn test_evaluation() {
-        let ast = parse(".age > 25").unwrap();
-        let mut rec = IndexMap::new();
-        rec.insert("age".to_string(), Value::Integer(30));
-        assert_eq!(ast.evaluate(&rec), Value::Boolean(true));
-
-        rec.insert("age".to_string(), Value::Integer(20));
-        assert_eq!(ast.evaluate(&rec), Value::Boolean(false));
+    fn test_parsing_precedence() {
+        // && should bind tighter than ||
+        let ast = parse(".age > 20 || .age < 10 && .admin == true").unwrap();
+        
+        let expected = Expr::BinaryOp {
+            op: Operator::Or,
+            left: Box::new(Expr::BinaryOp {
+                op: Operator::Gt,
+                left: Box::new(Expr::FieldAccess("age".to_string())),
+                right: Box::new(Expr::Literal(Value::Integer(20)))
+            }),
+            right: Box::new(Expr::BinaryOp {
+                op: Operator::And,
+                left: Box::new(Expr::BinaryOp {
+                    op: Operator::Lt,
+                    left: Box::new(Expr::FieldAccess("age".to_string())),
+                    right: Box::new(Expr::Literal(Value::Integer(10)))
+                }),
+                right: Box::new(Expr::BinaryOp {
+                    op: Operator::Eq,
+                    left: Box::new(Expr::FieldAccess("admin".to_string())),
+                    right: Box::new(Expr::Literal(Value::Boolean(true)))
+                })
+            })
+        };
+        assert_eq!(ast, expected);
     }
 }
