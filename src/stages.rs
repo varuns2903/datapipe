@@ -22,18 +22,18 @@ impl Stage for SelectStage {
         // We clone the fields vector so it can be moved into the closure
         // without worrying about borrowing `self`
         let fields = self.fields.clone();
-        
+
         let mapped = input.map(move |res| {
             let record = res?;
             let mut new_record = IndexMap::new();
-            
+
             for field in &fields {
                 let val = record.get(field).cloned().unwrap_or(Value::Null);
                 new_record.insert(field.clone(), val);
             }
             Ok(new_record)
         });
-        
+
         Box::new(mapped)
     }
 }
@@ -46,7 +46,7 @@ impl Stage for FilterStage {
     fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
         // We need to clone the AST so the closure can own it
         let ast = self.ast.clone();
-        
+
         let mapped = input.filter_map(move |res| match res {
             Ok(record) => {
                 let eval_res = ast.evaluate(&record);
@@ -58,7 +58,7 @@ impl Stage for FilterStage {
             }
             Err(e) => Some(Err(e)),
         });
-        
+
         Box::new(mapped)
     }
 }
@@ -72,13 +72,13 @@ impl Stage for SortStage {
     fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
         let field = self.field.clone();
         let desc = self.desc;
-        
+
         // Eagerly collect all records for sorting
         let mut records = match input.collect::<Result<Vec<_>>>() {
             Ok(r) => r,
             Err(e) => return Box::new(std::iter::once(Err(e))),
         };
-        
+
         records.sort_by(|a, b| {
             let val_a = a.get(&field).unwrap_or(&Value::Null);
             let val_b = b.get(&field).unwrap_or(&Value::Null);
@@ -88,7 +88,7 @@ impl Stage for SortStage {
             }
             ord
         });
-        
+
         Box::new(records.into_iter().map(Ok))
     }
 }
@@ -101,7 +101,7 @@ impl Stage for UniqueStage {
     fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
         let field = self.field.clone();
         let mut seen = std::collections::HashSet::new();
-        
+
         let filtered = input.filter_map(move |res| {
             match res {
                 Ok(record) => {
@@ -118,7 +118,7 @@ impl Stage for UniqueStage {
                 Err(e) => Some(Err(e)),
             }
         });
-        
+
         Box::new(filtered)
     }
 }
@@ -127,11 +127,11 @@ pub struct CountStage;
 
 impl Stage for CountStage {
     fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
-        let count = input.count(); 
-        
+        let count = input.count();
+
         let mut rec = indexmap::IndexMap::new();
         rec.insert("count".to_string(), Value::Integer(count as i64));
-        
+
         Box::new(std::iter::once(Ok(rec)))
     }
 }
@@ -152,26 +152,33 @@ impl Stage for SumStage {
                 if let Some(val) = rec.get(&field) {
                     match val {
                         Value::Integer(i) => {
-                            if is_float { sum_float += *i as f64; }
-                            else { sum_int += i; }
-                        },
+                            if is_float {
+                                sum_float += *i as f64;
+                            } else {
+                                sum_int += i;
+                            }
+                        }
                         Value::Float(f) => {
                             if !is_float {
                                 is_float = true;
                                 sum_float = sum_int as f64;
                             }
                             sum_float += f;
-                        },
+                        }
                         _ => {}
                     }
                 }
             }
         }
-        
+
         let mut result_rec = indexmap::IndexMap::new();
-        let final_val = if is_float { Value::Float(sum_float) } else { Value::Integer(sum_int) };
+        let final_val = if is_float {
+            Value::Float(sum_float)
+        } else {
+            Value::Integer(sum_int)
+        };
         result_rec.insert(format!("sum_{}", field), final_val);
-        
+
         Box::new(std::iter::once(Ok(result_rec)))
     }
 }
@@ -190,18 +197,28 @@ impl Stage for AvgStage {
             if let Ok(rec) = res {
                 if let Some(val) = rec.get(&field) {
                     match val {
-                        Value::Integer(i) => { sum += *i as f64; count += 1; },
-                        Value::Float(f) => { sum += f; count += 1; },
-                        _ => {} 
+                        Value::Integer(i) => {
+                            sum += *i as f64;
+                            count += 1;
+                        }
+                        Value::Float(f) => {
+                            sum += f;
+                            count += 1;
+                        }
+                        _ => {}
                     }
                 }
             }
         }
-        
+
         let mut result_rec = indexmap::IndexMap::new();
-        let final_val = if count == 0 { Value::Null } else { Value::Float(sum / count as f64) };
+        let final_val = if count == 0 {
+            Value::Null
+        } else {
+            Value::Float(sum / count as f64)
+        };
         result_rec.insert(format!("avg_{}", field), final_val);
-        
+
         Box::new(std::iter::once(Ok(result_rec)))
     }
 }
@@ -228,7 +245,7 @@ impl Stage for MinStage {
                 }
             }
         }
-        
+
         let mut result_rec = indexmap::IndexMap::new();
         result_rec.insert(format!("min_{}", field), min_val.unwrap_or(Value::Null));
         Box::new(std::iter::once(Ok(result_rec)))
@@ -248,7 +265,8 @@ impl Stage for MaxStage {
             if let Ok(rec) = res {
                 if let Some(val) = rec.get(&field) {
                     if let Some(ref current_max) = max_val {
-                        if crate::model::cmp_values(val, current_max) == std::cmp::Ordering::Greater {
+                        if crate::model::cmp_values(val, current_max) == std::cmp::Ordering::Greater
+                        {
                             max_val = Some(val.clone());
                         }
                     } else {
@@ -257,7 +275,7 @@ impl Stage for MaxStage {
                 }
             }
         }
-        
+
         let mut result_rec = indexmap::IndexMap::new();
         result_rec.insert(format!("max_{}", field), max_val.unwrap_or(Value::Null));
         Box::new(std::iter::once(Ok(result_rec)))
@@ -268,7 +286,8 @@ pub struct SchemaStage;
 
 impl Stage for SchemaStage {
     fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
-        let mut field_types: indexmap::IndexMap<String, std::collections::HashSet<String>> = indexmap::IndexMap::new();
+        let mut field_types: indexmap::IndexMap<String, std::collections::HashSet<String>> =
+            indexmap::IndexMap::new();
 
         for res in input.take(10_000) {
             if let Ok(rec) = res {
@@ -282,7 +301,8 @@ impl Stage for SchemaStage {
                         Value::Array(_) => "array",
                         Value::Object(_) => "object",
                     };
-                    field_types.entry(key)
+                    field_types
+                        .entry(key)
                         .or_default()
                         .insert(type_name.to_string());
                 }
@@ -293,10 +313,7 @@ impl Stage for SchemaStage {
         for (field, types) in field_types {
             let mut types_vec: Vec<_> = types.into_iter().collect();
             types_vec.sort();
-            result_rec.insert(
-                field, 
-                Value::String(types_vec.join(" | "))
-            );
+            result_rec.insert(field, Value::String(types_vec.join(" | ")));
         }
 
         Box::new(std::iter::once(Ok(result_rec)))

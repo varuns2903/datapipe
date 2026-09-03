@@ -16,7 +16,7 @@ fn main() -> anyhow::Result<()> {
 
     let stdin_handle = stdin();
     let reader = BufReader::new(stdin_handle.lock());
-    
+
     let stdout_handle = stdout();
     let writer = BufWriter::new(stdout_handle.lock());
 
@@ -30,7 +30,9 @@ fn main() -> anyhow::Result<()> {
     let is_csv_out = matches!(cli.command, Command::Csv);
 
     match cli.command {
-        Command::Filter { expression } => pipeline.add_stage(Box::new(FilterStage { ast: crate::expr::parse(&expression)? })),
+        Command::Filter { expression } => pipeline.add_stage(Box::new(FilterStage {
+            ast: crate::expr::parse(&expression)?,
+        })),
         Command::Select { fields } => pipeline.add_stage(Box::new(SelectStage { fields })),
         Command::Limit { max } => pipeline.add_stage(Box::new(LimitStage { max })),
         Command::Sort { field, desc } => pipeline.add_stage(Box::new(SortStage { field, desc })),

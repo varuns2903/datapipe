@@ -54,13 +54,9 @@ mod tests {
         // Create 3 dummy records
         let mut rec = IndexMap::new();
         rec.insert("a".to_string(), Value::Integer(1));
-        
-        let inputs = vec![
-            Ok(rec.clone()),
-            Ok(rec.clone()),
-            Ok(rec.clone()),
-        ];
-        
+
+        let inputs = vec![Ok(rec.clone()), Ok(rec.clone()), Ok(rec.clone())];
+
         // Wrap our vector into a Boxed Stream
         let stream: RecordStream = Box::new(inputs.into_iter());
 

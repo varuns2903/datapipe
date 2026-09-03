@@ -1,7 +1,7 @@
 use crate::model::{Record, Value};
 use anyhow::Result;
-use std::io::{BufRead, Write};
 use serde_json::Deserializer;
+use std::io::{BufRead, Write};
 
 // JSON In
 pub fn read_json_stream<'a, R: BufRead + 'a>(
@@ -31,17 +31,17 @@ pub fn read_csv_stream<'a, R: BufRead + 'a>(
     let mut csv_reader = csv::ReaderBuilder::new()
         .has_headers(true)
         .from_reader(reader);
-        
+
     let headers = csv_reader.headers()?.clone();
-    
+
     // We want to return an iterator that produces Record (IndexMap<String, Value>)
     let iter = csv_reader.into_records().map(move |res| {
         let string_record = res.map_err(|e| anyhow::anyhow!("CSV parse error: {}", e))?;
         let mut record = indexmap::IndexMap::new();
-        
+
         for (i, field) in string_record.iter().enumerate() {
             let header_name = headers.get(i).unwrap_or("unknown").to_string();
-            
+
             // Try to infer numbers, otherwise treat as string
             let value = if let Ok(n) = field.parse::<i64>() {
                 Value::Integer(n)
@@ -56,13 +56,13 @@ pub fn read_csv_stream<'a, R: BufRead + 'a>(
             } else {
                 Value::String(field.to_string())
             };
-            
+
             record.insert(header_name, value);
         }
-        
+
         Ok(record)
     });
-    
+
     Ok(iter)
 }
 
@@ -72,7 +72,7 @@ pub fn write_csv_stream<W: Write>(
     mut records: impl Iterator<Item = Result<Record>>,
 ) -> Result<()> {
     let mut csv_writer = csv::Writer::from_writer(writer);
-    
+
     // We need to fetch the first record to write the headers.
     // If the stream is empty, we do nothing.
     let mut first_record = None;
@@ -82,29 +82,29 @@ pub fn write_csv_stream<W: Write>(
         csv_writer.write_record(&headers)?;
         first_record = Some((rec, headers));
     }
-    
+
     let (first_rec, headers) = match first_record {
         Some(x) => x,
         None => return Ok(()),
     };
-    
+
     // Write first record
     write_csv_row(&mut csv_writer, &first_rec, &headers)?;
-    
+
     // Write remaining records
     for record in records {
         let rec = record?;
         write_csv_row(&mut csv_writer, &rec, &headers)?;
     }
-    
+
     csv_writer.flush()?;
     Ok(())
 }
 
 fn write_csv_row<W: Write>(
-    csv_writer: &mut csv::Writer<W>, 
-    record: &Record, 
-    headers: &[String]
+    csv_writer: &mut csv::Writer<W>,
+    record: &Record,
+    headers: &[String],
 ) -> Result<()> {
     let mut row = Vec::new();
     for header in headers {

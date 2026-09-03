@@ -124,7 +124,7 @@ pub fn parse(input: &str) -> Result<Expr> {
     if tokens.is_empty() {
         return Err(anyhow!("Empty expression"));
     }
-    
+
     // A very simple parser that specifically looks for: <Left> <Op> <Right>
     if tokens.len() == 3 {
         let left = match &tokens[0] {
@@ -133,28 +133,30 @@ pub fn parse(input: &str) -> Result<Expr> {
             Token::IntLit(i) => Expr::Literal(Value::Integer(*i)),
             _ => return Err(anyhow!("Invalid left operand")),
         };
-        
+
         let op = match &tokens[1] {
             Token::EqEq => Operator::Eq,
             Token::Gt => Operator::Gt,
             _ => return Err(anyhow!("Invalid operator")),
         };
-        
+
         let right = match &tokens[2] {
             Token::Field(f) => Expr::FieldAccess(f.clone()),
             Token::StringLit(s) => Expr::Literal(Value::String(s.clone())),
             Token::IntLit(i) => Expr::Literal(Value::Integer(*i)),
             _ => return Err(anyhow!("Invalid right operand")),
         };
-        
+
         return Ok(Expr::BinaryOp {
             op,
             left: Box::new(left),
             right: Box::new(right),
         });
     }
-    
-    Err(anyhow!("Unsupported expression format. Try something like '.age > 25'"))
+
+    Err(anyhow!(
+        "Unsupported expression format. Try something like '.age > 25'"
+    ))
 }
 
 #[cfg(test)]
@@ -165,11 +167,14 @@ mod tests {
     #[test]
     fn test_lexing() {
         let tokens = lex(".age > 25").unwrap();
-        assert_eq!(tokens, vec![
-            Token::Field("age".to_string()),
-            Token::Gt,
-            Token::IntLit(25),
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Field("age".to_string()),
+                Token::Gt,
+                Token::IntLit(25),
+            ]
+        );
     }
 
     #[test]
