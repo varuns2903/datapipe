@@ -3,6 +3,9 @@ name = "datapipe-cli"
 version = "0.1.0"
 edition = "2021"
 authors = ["Varun"]
+license = "MIT"
+description = "A streaming JSON/CSV data processing pipeline CLI"
+repository = "https://github.com/varuns2903/datapipe"
 description = "A high-performance, streaming-first CLI for structured data"
 
 [dependencies]
