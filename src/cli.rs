@@ -15,6 +15,16 @@ pub enum Command {
         /// The expression to evaluate (e.g., '.age > 25')
         expression: String,
     },
+    /// Keep only the specified fields from each record
+    Select {
+        /// Comma-separated list of fields to keep (e.g., name,age)
+        #[arg(value_delimiter = ',')]
+        fields: Vec<String>,
+    },
+    /// Limit the stream to the first N records
+    Limit {
+        max: usize,
+    },
     /// Stream and inspect data (Pass-through test)
     Inspect,
 }
