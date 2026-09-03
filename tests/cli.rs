@@ -15,9 +15,11 @@ fn test_filter_command() {
     let mut cmd = Command::cargo_bin("datapipe").unwrap();
     cmd.arg("filter")
         .arg(".age > 25")
+        .write_stdin("{\"name\": \"Varun\", \"age\": 30}\n{\"name\": \"Alice\", \"age\": 20}\n")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Filtering with expression: .age > 25"));
+        .stdout(predicate::str::contains("Varun"))
+        .stdout(predicate::str::contains("Alice").not());
 }
 
 #[test]

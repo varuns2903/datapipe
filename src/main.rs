@@ -1,4 +1,5 @@
 mod cli;
+mod expr;
 mod io;
 mod model;
 mod pipeline;
@@ -7,7 +8,7 @@ mod stages;
 use clap::Parser;
 use cli::{Cli, Command};
 use pipeline::Pipeline;
-use stages::{LimitStage, SelectStage};
+use stages::{FilterStage, LimitStage, SelectStage};
 use std::io::{stdin, stdout, BufReader, BufWriter};
 
 fn main() -> anyhow::Result<()> {
@@ -27,8 +28,8 @@ fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Command::Filter { expression } => {
-            println!("Filtering with expression: {}", expression);
-            return Ok(());
+            let ast = crate::expr::parse(&expression)?;
+            pipeline.add_stage(Box::new(FilterStage { ast }));
         }
         Command::Select { fields } => {
             pipeline.add_stage(Box::new(SelectStage { fields }));

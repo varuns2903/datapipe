@@ -37,3 +37,28 @@ impl Stage for SelectStage {
         Box::new(mapped)
     }
 }
+
+pub struct FilterStage {
+    pub ast: crate::expr::Expr,
+}
+
+impl Stage for FilterStage {
+    fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
+        // We need to clone the AST so the closure can own it
+        let ast = self.ast.clone();
+        
+        let mapped = input.filter_map(move |res| match res {
+            Ok(record) => {
+                let eval_res = ast.evaluate(&record);
+                if let Value::Boolean(true) = eval_res {
+                    Some(Ok(record))
+                } else {
+                    None
+                }
+            }
+            Err(e) => Some(Err(e)),
+        });
+        
+        Box::new(mapped)
+    }
+}
