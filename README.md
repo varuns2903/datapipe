@@ -14,12 +14,17 @@ Instead of operating on raw text strings, `dp` operates on structured records na
 
 ## Installation
 
-Ensure you have Rust installed, then run:
+You can install DataPipe globally directly from crates.io:
 
+```bash
+cargo install datapipe-cli
+```
+*(This will install the `dp` binary to your `~/.cargo/bin` directory)*
+
+Alternatively, you can build from source:
 ```bash
 cargo install --path .
 ```
-*(Make sure `~/.cargo/bin` is in your PATH)*
 
 ## Quick Start
 
