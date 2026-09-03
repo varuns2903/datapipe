@@ -4,6 +4,10 @@ use clap::{Parser, Subcommand};
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
+    /// Read input as CSV instead of JSON
+    #[arg(long, global = true)]
+    pub in_csv: bool,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -27,4 +31,6 @@ pub enum Command {
     },
     /// Stream and inspect data (Pass-through test)
     Inspect,
+    /// Output the stream as CSV
+    Csv,
 }

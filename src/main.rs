@@ -21,10 +21,16 @@ fn main() -> anyhow::Result<()> {
     let writer = BufWriter::new(stdout_handle.lock());
 
     // IO In
-    let records = crate::io::read_json_stream(reader);
+    let records: crate::pipeline::RecordStream = if cli.in_csv {
+        Box::new(crate::io::read_csv_stream(reader)?)
+    } else {
+        Box::new(crate::io::read_json_stream(reader))
+    };
 
     // Build Pipeline
     let mut pipeline = Pipeline::new();
+    
+    let is_csv_out = matches!(cli.command, Command::Csv);
 
     match cli.command {
         Command::Filter { expression } => {
@@ -37,14 +43,20 @@ fn main() -> anyhow::Result<()> {
         Command::Limit { max } => {
             pipeline.add_stage(Box::new(LimitStage { max }));
         }
-        Command::Inspect => {
-            // No stages added, just pass-through!
+        Command::Inspect | Command::Csv => {
+            // No transformation stages added
         }
     }
 
-    // Process & IO Out
-    let result_stream = pipeline.process(Box::new(records));
-    crate::io::write_json_stream(writer, result_stream)?;
+    // Process
+    let result_stream = pipeline.process(records);
+
+    // IO Out
+    if is_csv_out {
+        crate::io::write_csv_stream(writer, result_stream)?;
+    } else {
+        crate::io::write_json_stream(writer, result_stream)?;
+    }
 
     Ok(())
 }
