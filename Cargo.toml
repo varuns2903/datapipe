@@ -27,3 +27,7 @@ path = "src/main.rs"
 [[bench]]
 name = "bench"
 harness = false
+
+[lib]
+name = "datapipe"
+path = "src/lib.rs"
