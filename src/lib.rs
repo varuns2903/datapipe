@@ -47,6 +47,11 @@ pub fn run_cli() -> miette::Result<()> {
         Command::Max { field } => pipeline.add_stage(Box::new(MaxStage { field })),
         Command::Schema => pipeline.add_stage(Box::new(SchemaStage)),
         Command::Group { by, sum, count } => pipeline.add_stage(Box::new(GroupStage { by, sum, count })),
+        Command::Explode { field } => pipeline.add_stage(Box::new(ExplodeStage { field })),
+        Command::Map { field, expression } => {
+            let ast = crate::expr::parse(&expression).unwrap();
+            pipeline.add_stage(Box::new(MapStage { field, ast }));
+        },
         Command::Join { file, on } => {
             let f = std::fs::File::open(&file).map_err(|e| miette::miette!("Failed to open join file: {}", e))?;
             let reader = BufReader::new(f);

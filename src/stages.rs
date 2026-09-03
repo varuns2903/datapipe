@@ -186,32 +186,179 @@ impl Stage for MaxStage {
     }
 }
 
+
 pub struct SortStage {
     pub field: String,
     pub desc: bool,
 }
 
+struct HeapItem {
+    record: Record,
+    file_idx: usize,
+    field: String,
+    desc: bool,
+}
+
+impl PartialEq for HeapItem {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+impl Eq for HeapItem {}
+impl PartialOrd for HeapItem {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for HeapItem {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let val_a = self.record.get(&self.field).unwrap_or(&Value::Null);
+        let val_b = other.record.get(&other.field).unwrap_or(&Value::Null);
+        let mut ord = crate::model::cmp_values(val_a, val_b);
+        if self.desc {
+            ord = ord.reverse();
+        }
+        // Reverse because BinaryHeap is a MAX heap, and we want a MIN heap for K-way merge
+        ord.reverse()
+    }
+}
+
+pub struct ExternalSortIter<'a> {
+    pub readers: Vec<RecordStream<'a>>,
+    pub heap: std::collections::BinaryHeap<HeapItem>,
+    pub field: String,
+    pub desc: bool,
+    pub initialized: bool,
+}
+
+impl<'a> Iterator for ExternalSortIter<'a> {
+    type Item = anyhow::Result<Record>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if !self.initialized {
+            for (idx, reader) in self.readers.iter_mut().enumerate() {
+                if let Some(Ok(rec)) = reader.next() {
+                    self.heap.push(HeapItem { record: rec, file_idx: idx, field: self.field.clone(), desc: self.desc });
+                }
+            }
+            self.initialized = true;
+        }
+        
+        if let Some(min_item) = self.heap.pop() {
+            let idx = min_item.file_idx;
+            let record = min_item.record;
+            
+            if let Some(Ok(next_rec)) = self.readers[idx].next() {
+                self.heap.push(HeapItem { record: next_rec, file_idx: idx, field: self.field.clone(), desc: self.desc });
+            }
+            return Some(Ok(record));
+        }
+        None
+    }
+}
+
 impl Stage for SortStage {
-    fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
+    fn process<'a>(&'a self, mut input: RecordStream<'a>) -> RecordStream<'a> {
         let field = self.field.clone();
         let desc = self.desc;
+        let mut temp_files = Vec::new();
         
-        let mut records = match input.collect::<Result<Vec<_>, _>>() {
-            Ok(r) => r,
-            Err(e) => return Box::new(std::iter::once(Err(e))),
-        };
-        
-        records.sort_by(|a, b| {
-            let val_a = a.get(&field).unwrap_or(&Value::Null);
-            let val_b = b.get(&field).unwrap_or(&Value::Null);
-            let mut ord = crate::model::cmp_values(val_a, val_b);
-            if desc {
-                ord = ord.reverse();
+        loop {
+            let mut chunk = Vec::with_capacity(50_000);
+            for _ in 0..50_000 {
+                if let Some(Ok(rec)) = input.next() {
+                    chunk.push(rec);
+                } else { break; }
             }
-            ord
-        });
+            if chunk.is_empty() { break; }
+            
+            chunk.sort_by(|a, b| {
+                let val_a = a.get(&field).unwrap_or(&Value::Null);
+                let val_b = b.get(&field).unwrap_or(&Value::Null);
+                let mut ord = crate::model::cmp_values(val_a, val_b);
+                if desc { ord = ord.reverse(); }
+                ord
+            });
+            
+            let mut tmp = tempfile::NamedTempFile::new().unwrap();
+            for rec in chunk {
+                let json = serde_json::to_string(&rec).unwrap();
+                use std::io::Write;
+                writeln!(tmp, "{}", json).unwrap();
+            }
+            temp_files.push(tmp.into_temp_path());
+        }
         
-        Box::new(records.into_iter().map(Ok))
+        if temp_files.is_empty() {
+            return Box::new(std::iter::empty());
+        }
+        
+        let mut readers: Vec<RecordStream<'a>> = Vec::new();
+        for path in temp_files {
+            let file = std::fs::File::open(path).unwrap();
+            let reader = std::io::BufReader::new(file);
+            let stream = crate::io::read_json_stream(reader);
+            readers.push(Box::new(stream));
+        }
+        
+        Box::new(ExternalSortIter {
+            readers,
+            heap: std::collections::BinaryHeap::new(),
+            field,
+            desc,
+            initialized: false,
+        })
+    }
+}
+
+pub struct ExplodeStage {
+    pub field: String,
+}
+
+impl Stage for ExplodeStage {
+    fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
+        let field = self.field.clone();
+        let iter = input.flat_map(move |res| {
+            match res {
+                Ok(record) => {
+                    if let Some(Value::Array(arr)) = record.get(&field) {
+                        let mut out = Vec::new();
+                        for item in arr.iter() {
+                            let mut new_rec = record.clone();
+                            new_rec.insert(field.clone(), item.clone());
+                            out.push(Ok(new_rec));
+                        }
+                        out.into_iter()
+                    } else {
+                        vec![Ok(record)].into_iter()
+                    }
+                }
+                Err(e) => vec![Err(e)].into_iter(),
+            }
+        });
+        Box::new(iter)
+    }
+}
+
+pub struct MapStage {
+    pub field: String,
+    pub ast: crate::expr::Expr,
+}
+
+impl Stage for MapStage {
+    fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
+        let field = self.field.clone();
+        let ast = self.ast.clone();
+        let iter = input.map(move |res| {
+            match res {
+                Ok(mut record) => {
+                    let new_val = ast.evaluate(&record);
+                    record.insert(field.clone(), new_val);
+                    Ok(record)
+                },
+                Err(e) => Err(e),
+            }
+        });
+        Box::new(iter)
     }
 }
 
@@ -379,3 +526,4 @@ impl Stage for JoinStage {
         Box::new(iter)
     }
 }
+

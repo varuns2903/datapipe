@@ -25,19 +25,10 @@ pub enum Command {
     Schema,
     Inspect,
     Csv,
-    Group {
-        by: String,
-        #[arg(long)]
-        sum: Option<String>,
-        #[arg(long)]
-        count: bool,
-    },
-    /// Join the stream with another JSON/CSV file
-    Join {
-        /// The file to join with (must be .csv or .jsonl)
-        file: String,
-        /// The field to join on (must exist in both streams)
-        #[arg(long)]
-        on: String,
-    }
+    Group { by: String, #[arg(long)] sum: Option<String>, #[arg(long)] count: bool },
+    Join { file: String, #[arg(long)] on: String },
+    /// Explode an array field into multiple records
+    Explode { field: String },
+    /// Compute a new field or overwrite an existing one using an expression
+    Map { field: String, expression: String },
 }
