@@ -1,3 +1,4 @@
+pub mod par_iter;
 pub mod cli;
 pub mod error;
 pub mod expr;
