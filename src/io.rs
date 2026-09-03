@@ -40,7 +40,7 @@ pub fn read_csv_stream<'a, R: BufRead + 'a>(
         let mut record = indexmap::IndexMap::new();
         
         for (i, field) in string_record.iter().enumerate() {
-            let header_name = headers.get(i).unwrap_or(&"unknown".into()).to_string();
+            let header_name = headers.get(i).unwrap_or("unknown").to_string();
             
             // Try to infer numbers, otherwise treat as string
             let value = if let Ok(n) = field.parse::<i64>() {
