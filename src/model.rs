@@ -1,6 +1,8 @@
 use indexmap::IndexMap;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum Value {
     Null,
     Boolean(bool),

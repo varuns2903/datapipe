@@ -15,4 +15,6 @@ pub enum Command {
         /// The expression to evaluate (e.g., '.age > 25')
         expression: String,
     },
+    /// Stream and inspect data (Pass-through test)
+    Inspect,
 }
