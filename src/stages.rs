@@ -122,3 +122,144 @@ impl Stage for UniqueStage {
         Box::new(filtered)
     }
 }
+
+pub struct CountStage;
+
+impl Stage for CountStage {
+    fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
+        let count = input.count(); 
+        
+        let mut rec = indexmap::IndexMap::new();
+        rec.insert("count".to_string(), Value::Integer(count as i64));
+        
+        Box::new(std::iter::once(Ok(rec)))
+    }
+}
+
+pub struct SumStage {
+    pub field: String,
+}
+
+impl Stage for SumStage {
+    fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
+        let field = self.field.clone();
+        let mut sum_int = 0i64;
+        let mut sum_float = 0f64;
+        let mut is_float = false;
+
+        for res in input {
+            if let Ok(rec) = res {
+                if let Some(val) = rec.get(&field) {
+                    match val {
+                        Value::Integer(i) => {
+                            if is_float { sum_float += *i as f64; }
+                            else { sum_int += i; }
+                        },
+                        Value::Float(f) => {
+                            if !is_float {
+                                is_float = true;
+                                sum_float = sum_int as f64;
+                            }
+                            sum_float += f;
+                        },
+                        _ => {}
+                    }
+                }
+            }
+        }
+        
+        let mut result_rec = indexmap::IndexMap::new();
+        let final_val = if is_float { Value::Float(sum_float) } else { Value::Integer(sum_int) };
+        result_rec.insert(format!("sum_{}", field), final_val);
+        
+        Box::new(std::iter::once(Ok(result_rec)))
+    }
+}
+
+pub struct AvgStage {
+    pub field: String,
+}
+
+impl Stage for AvgStage {
+    fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
+        let field = self.field.clone();
+        let mut sum = 0f64;
+        let mut count = 0i64;
+
+        for res in input {
+            if let Ok(rec) = res {
+                if let Some(val) = rec.get(&field) {
+                    match val {
+                        Value::Integer(i) => { sum += *i as f64; count += 1; },
+                        Value::Float(f) => { sum += f; count += 1; },
+                        _ => {} 
+                    }
+                }
+            }
+        }
+        
+        let mut result_rec = indexmap::IndexMap::new();
+        let final_val = if count == 0 { Value::Null } else { Value::Float(sum / count as f64) };
+        result_rec.insert(format!("avg_{}", field), final_val);
+        
+        Box::new(std::iter::once(Ok(result_rec)))
+    }
+}
+
+pub struct MinStage {
+    pub field: String,
+}
+
+impl Stage for MinStage {
+    fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
+        let field = self.field.clone();
+        let mut min_val: Option<Value> = None;
+
+        for res in input {
+            if let Ok(rec) = res {
+                if let Some(val) = rec.get(&field) {
+                    if let Some(ref current_min) = min_val {
+                        if crate::model::cmp_values(val, current_min) == std::cmp::Ordering::Less {
+                            min_val = Some(val.clone());
+                        }
+                    } else {
+                        min_val = Some(val.clone());
+                    }
+                }
+            }
+        }
+        
+        let mut result_rec = indexmap::IndexMap::new();
+        result_rec.insert(format!("min_{}", field), min_val.unwrap_or(Value::Null));
+        Box::new(std::iter::once(Ok(result_rec)))
+    }
+}
+
+pub struct MaxStage {
+    pub field: String,
+}
+
+impl Stage for MaxStage {
+    fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
+        let field = self.field.clone();
+        let mut max_val: Option<Value> = None;
+
+        for res in input {
+            if let Ok(rec) = res {
+                if let Some(val) = rec.get(&field) {
+                    if let Some(ref current_max) = max_val {
+                        if crate::model::cmp_values(val, current_max) == std::cmp::Ordering::Greater {
+                            max_val = Some(val.clone());
+                        }
+                    } else {
+                        max_val = Some(val.clone());
+                    }
+                }
+            }
+        }
+        
+        let mut result_rec = indexmap::IndexMap::new();
+        result_rec.insert(format!("max_{}", field), max_val.unwrap_or(Value::Null));
+        Box::new(std::iter::once(Ok(result_rec)))
+    }
+}

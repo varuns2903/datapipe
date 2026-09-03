@@ -14,33 +14,37 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Filter records based on an expression
     Filter {
-        /// The expression to evaluate (e.g., '.age > 25')
         expression: String,
     },
-    /// Keep only the specified fields from each record
     Select {
-        /// Comma-separated list of fields to keep (e.g., name,age)
         #[arg(value_delimiter = ',')]
         fields: Vec<String>,
     },
-    /// Limit the stream to the first N records
     Limit {
         max: usize,
     },
-    /// Sort the stream by a field
     Sort {
         field: String,
         #[arg(long)]
         desc: bool,
     },
-    /// Keep only the first record for each unique value of a field
     Unique {
         field: String,
     },
-    /// Stream and inspect data (Pass-through test)
+    Count,
+    Sum {
+        field: String,
+    },
+    Avg {
+        field: String,
+    },
+    Min {
+        field: String,
+    },
+    Max {
+        field: String,
+    },
     Inspect,
-    /// Output the stream as CSV
     Csv,
 }
