@@ -5,6 +5,7 @@ edition = "2021"
 authors = ["Varun"]
 license = "MIT"
 repository = "https://github.com/varuns2903/datapipe"
+homepage = "https://github.com/varuns2903/datapipe"
 description = "A high-performance, streaming-first CLI for structured data"
 
 [dependencies]
