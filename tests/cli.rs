@@ -3,7 +3,7 @@ use predicates::prelude::*;
 
 #[test]
 fn test_help() {
-    let mut cmd = Command::cargo_bin("datapipe").unwrap();
+    let mut cmd = Command::cargo_bin("dp").unwrap();
     cmd.arg("--help")
         .assert()
         .success()
@@ -12,7 +12,7 @@ fn test_help() {
 
 #[test]
 fn test_filter_command() {
-    let mut cmd = Command::cargo_bin("datapipe").unwrap();
+    let mut cmd = Command::cargo_bin("dp").unwrap();
     cmd.arg("filter")
         .arg(".age > 25")
         .write_stdin("{\"name\": \"Varun\", \"age\": 30}\n{\"name\": \"Alice\", \"age\": 20}\n")
@@ -24,7 +24,7 @@ fn test_filter_command() {
 
 #[test]
 fn test_missing_command() {
-    let mut cmd = Command::cargo_bin("datapipe").unwrap();
+    let mut cmd = Command::cargo_bin("dp").unwrap();
     cmd.assert()
         .failure()
         .stderr(predicate::str::contains("Usage"));

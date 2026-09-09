@@ -192,7 +192,7 @@ pub struct SortStage {
     pub desc: bool,
 }
 
-struct HeapItem {
+pub(crate) struct HeapItem {
     record: Record,
     file_idx: usize,
     field: String,
@@ -225,7 +225,7 @@ impl Ord for HeapItem {
 
 pub struct ExternalSortIter<'a> {
     pub readers: Vec<RecordStream<'a>>,
-    pub heap: std::collections::BinaryHeap<HeapItem>,
+    pub(crate) heap: std::collections::BinaryHeap<HeapItem>,
     pub field: String,
     pub desc: bool,
     pub initialized: bool,
