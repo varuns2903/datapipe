@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `matches(a, "pattern")` regex function in `filter`/`map` expressions, e.g.
+  `matches(.email, "^.+@example\.com$")`. The pattern must be a string
+  literal so it can be compiled once at parse time rather than recompiled
+  on every record - important for keeping large-stream throughput. Added
+  the `regex` crate as a dependency.
 - `rename <old:new,...>` command to rename one or more fields.
 - `flatten [--sep <sep>]` command to flatten nested objects into dot-path
   keys, e.g. `{"user":{"name":"Alice"}}` -> `{"user.name":"Alice"}`. Useful

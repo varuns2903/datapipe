@@ -402,6 +402,7 @@ dependencies = [
  "predicates",
  "rand",
  "rayon",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",

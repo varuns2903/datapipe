@@ -2,6 +2,19 @@ use crate::model::{Record, Value};
 use anyhow::{anyhow, Result};
 use std::cmp::Ordering;
 
+/// Wraps a compiled `Regex` so it can live in `Expr` (which derives
+/// `PartialEq`) - `regex::Regex` itself doesn't implement `PartialEq`, so
+/// comparison falls back to the original pattern text, which is exactly what
+/// equality should mean for a compiled-once-at-parse-time regex anyway.
+#[derive(Debug, Clone)]
+pub struct CompiledRegex(pub std::sync::Arc<regex::Regex>);
+
+impl PartialEq for CompiledRegex {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.as_str() == other.0.as_str()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Operator {
     Eq,
@@ -36,6 +49,13 @@ pub enum Expr {
         needle: Box<Expr>,
         haystack: Vec<Expr>,
     },
+    /// `matches(text, "pattern")` - the pattern is compiled once at parse
+    /// time (it must be a string literal, not an arbitrary expression), so
+    /// evaluating this per-record never recompiles the regex.
+    Match {
+        text: Box<Expr>,
+        pattern: CompiledRegex,
+    },
 }
 
 impl Expr {
@@ -61,6 +81,10 @@ impl Expr {
                 let val = needle.evaluate(record);
                 Value::Boolean(haystack.iter().any(|e| e.evaluate(record) == val))
             }
+            Expr::Match { text, pattern } => match text.evaluate(record) {
+                Value::String(s) => Value::Boolean(pattern.0.is_match(&s)),
+                _ => Value::Null,
+            },
             Expr::Call { name, args } => {
                 let values: Vec<Value> = args.iter().map(|a| a.evaluate(record)).collect();
                 match (name.as_str(), values.as_slice()) {
@@ -564,8 +588,33 @@ impl Parser {
             Some(Token::Ident(name)) => {
                 let name = name.clone();
                 self.consume();
-                let args =
+                let mut args =
                     self.parse_paren_expr_list(&format!("after function name '{}'", name))?;
+
+                if name == "matches" {
+                    if args.len() != 2 {
+                        return Err(anyhow!(
+                            "'matches' expects 2 argument(s), got {}",
+                            args.len()
+                        ));
+                    }
+                    let pattern_expr = args.pop().unwrap();
+                    let text_expr = args.pop().unwrap();
+                    let pattern_str = match pattern_expr {
+                        Expr::Literal(Value::String(s)) => s,
+                        _ => {
+                            return Err(anyhow!(
+                                "second argument to 'matches' must be a string literal, e.g. matches(.email, \"^.+@x\\.com$\")"
+                            ))
+                        }
+                    };
+                    let regex = regex::Regex::new(&pattern_str)
+                        .map_err(|e| anyhow!("Invalid regex pattern '{}': {}", pattern_str, e))?;
+                    return Ok(Expr::Match {
+                        text: Box::new(text_expr),
+                        pattern: CompiledRegex(std::sync::Arc::new(regex)),
+                    });
+                }
 
                 let expected_arity = match name.as_str() {
                     "contains" | "starts_with" | "ends_with" => 2,
@@ -1250,5 +1299,84 @@ mod tests {
     #[test]
     fn parse_rejects_in_without_parens() {
         assert!(parse(r#".a in "x""#).is_err());
+    }
+
+    // --- regex matches() ---
+
+    #[test]
+    fn eval_matches_basic() {
+        let rec = record_with(&[("email", Value::String("alice@example.com".to_string()))]);
+        assert_eq!(
+            parse(r#"matches(.email, "^.+@example\.com$")"#)
+                .unwrap()
+                .evaluate(&rec),
+            Value::Boolean(true)
+        );
+
+        let rec2 = record_with(&[("email", Value::String("bob@other.org".to_string()))]);
+        assert_eq!(
+            parse(r#"matches(.email, "^.+@example\.com$")"#)
+                .unwrap()
+                .evaluate(&rec2),
+            Value::Boolean(false)
+        );
+    }
+
+    #[test]
+    fn eval_matches_on_non_string_is_null() {
+        let rec = record_with(&[("age", Value::Integer(30))]);
+        assert_eq!(
+            parse(r#"matches(.age, "x")"#).unwrap().evaluate(&rec),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn eval_matches_combined_with_not() {
+        let rec = record_with(&[("email", Value::String("alice@spam.com".to_string()))]);
+        assert_eq!(
+            parse(r#"!matches(.email, "spam")"#).unwrap().evaluate(&rec),
+            Value::Boolean(false)
+        );
+    }
+
+    #[test]
+    fn eval_matches_on_nested_field() {
+        let mut user = IndexMap::new();
+        user.insert("phone".to_string(), Value::String("555-1234".to_string()));
+        let rec = record_with(&[("user", Value::Object(user))]);
+        assert_eq!(
+            parse(r#"matches(.user.phone, "^[0-9]{3}-[0-9]{4}$")"#)
+                .unwrap()
+                .evaluate(&rec),
+            Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn parse_rejects_invalid_regex_pattern() {
+        assert!(parse(r#"matches(.a, "[unclosed")"#).is_err());
+    }
+
+    #[test]
+    fn parse_rejects_non_literal_matches_pattern() {
+        // The pattern must be a string literal so it can be compiled once at
+        // parse time, not per-record.
+        assert!(parse("matches(.a, .b)").is_err());
+    }
+
+    #[test]
+    fn parse_rejects_matches_wrong_arity() {
+        assert!(parse(r#"matches(.a)"#).is_err());
+        assert!(parse(r#"matches(.a, "x", "y")"#).is_err());
+    }
+
+    #[test]
+    fn compiled_regex_equality_compares_pattern_text() {
+        let a = CompiledRegex(std::sync::Arc::new(regex::Regex::new("abc").unwrap()));
+        let b = CompiledRegex(std::sync::Arc::new(regex::Regex::new("abc").unwrap()));
+        let c = CompiledRegex(std::sync::Arc::new(regex::Regex::new("xyz").unwrap()));
+        assert_eq!(a, b);
+        assert_ne!(a, c);
     }
 }

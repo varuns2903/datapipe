@@ -138,6 +138,7 @@ All binary operators are left-associative. Parentheses `( )` can be used to over
 - **Arithmetic:** `+`, `-`, `*`, `/` on integers and floats (mixed int/float promotes to float). Division by zero evaluates to `null` rather than erroring. Arithmetic on incompatible types (e.g. `"a" + 1`) evaluates to `null`.
 - **String functions:** `contains(a, b)`, `starts_with(a, b)`, `ends_with(a, b)` (all return a boolean), and `lower(a)` / `upper(a)` (return a string). All operate on string values; a non-string operand evaluates to `null`. Function calls can be used anywhere an expression is expected, including as arguments to other functions or combined with `&&`/`||`/`!`.
 - **Membership:** `value in (a, b, c)` — evaluates to `true` if `value` equals any element of the list (compared the same way as `==`). Works with any value type, not just strings. An empty list (`in ()`) is always `false`.
+- **Regex:** `matches(a, "pattern")` — returns a boolean; `a` must evaluate to a string (non-string evaluates to `null`). The pattern **must be a string literal**, not a computed expression — it's compiled once when the expression is parsed, not on every record, so `filter`/`map` stay fast on large streams. String literals in this language don't process backslash escapes, so write the pattern exactly as you would in a regex (a single `\` before a special character, e.g. `"^.+@example\.com$"` — not `\\.`).
 
 Examples:
 ```bash
@@ -150,6 +151,7 @@ dp filter 'contains(.name, "Smith")'
 dp filter 'lower(.email) == "alice@example.com"'
 dp filter 'starts_with(.sku, "SKU-") && !ends_with(.sku, "-DISCONTINUED")'
 dp filter '.status in ("active", "pending")'
+dp filter 'matches(.email, "^.+@example\.com$")'
 ```
 
 ## Error behavior
