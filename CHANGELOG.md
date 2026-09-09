@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- String functions in `filter`/`map` expressions: `contains`, `starts_with`,
+  `ends_with`, `lower`, `upper`, e.g. `contains(.name, "Smith")` or
+  `lower(.email) == "alice@example.com"`. Previously there was no way to
+  do substring matching or case-insensitive comparison at all.
 - `dp man` command generating a troff-formatted man page.
 - `dp completions <shell>` command generating completion scripts for bash,
   zsh, fish, PowerShell, and elvish.

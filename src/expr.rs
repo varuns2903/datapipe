@@ -28,6 +28,10 @@ pub enum Expr {
         right: Box<Expr>,
     },
     Not(Box<Expr>),
+    Call {
+        name: String,
+        args: Vec<Expr>,
+    },
 }
 
 impl Expr {
@@ -49,6 +53,27 @@ impl Expr {
             }
             Expr::Literal(val) => val.clone(),
             Expr::Not(inner) => Value::Boolean(inner.evaluate(record) != Value::Boolean(true)),
+            Expr::Call { name, args } => {
+                let values: Vec<Value> = args.iter().map(|a| a.evaluate(record)).collect();
+                match (name.as_str(), values.as_slice()) {
+                    ("contains", [Value::String(haystack), Value::String(needle)]) => {
+                        Value::Boolean(haystack.contains(needle.as_str()))
+                    }
+                    ("starts_with", [Value::String(s), Value::String(prefix)]) => {
+                        Value::Boolean(s.starts_with(prefix.as_str()))
+                    }
+                    ("ends_with", [Value::String(s), Value::String(suffix)]) => {
+                        Value::Boolean(s.ends_with(suffix.as_str()))
+                    }
+                    ("lower", [Value::String(s)]) => Value::String(s.to_lowercase()),
+                    ("upper", [Value::String(s)]) => Value::String(s.to_uppercase()),
+                    // Right arity/known name (guaranteed by the parser) but a
+                    // non-string operand at runtime, e.g. contains(.age, "x")
+                    // where .age is an integer - null, consistent with how
+                    // other type mismatches in this module behave.
+                    _ => Value::Null,
+                }
+            }
             Expr::BinaryOp { op, left, right } => {
                 let l = left.evaluate(record);
                 if *op == Operator::And && l != Value::Boolean(true) {
@@ -160,6 +185,7 @@ pub enum Token {
     Bang,
     LParen,
     RParen,
+    Comma,
 }
 
 pub fn lex(input: &str) -> Result<Vec<Token>> {
@@ -193,6 +219,10 @@ pub fn lex(input: &str) -> Result<Vec<Token>> {
             ')' => {
                 chars.next();
                 tokens.push(Token::RParen);
+            }
+            ',' => {
+                chars.next();
+                tokens.push(Token::Comma);
             }
             '.' => {
                 chars.next();
@@ -330,7 +360,7 @@ pub fn lex(input: &str) -> Result<Vec<Token>> {
             'a'..='z' | 'A'..='Z' => {
                 let mut s = String::new();
                 while let Some(&ch) = chars.peek() {
-                    if ch.is_alphabetic() {
+                    if ch.is_alphanumeric() || ch == '_' {
                         s.push(ch);
                         chars.next();
                     } else {
@@ -342,7 +372,11 @@ pub fn lex(input: &str) -> Result<Vec<Token>> {
                 } else if s == "false" {
                     tokens.push(Token::BoolLit(false));
                 } else {
-                    return Err(anyhow!("Unexpected keyword: {}", s));
+                    // Not a keyword literal - treat as a function name, e.g.
+                    // `contains` in `contains(.name, "x")`. Whether it's a
+                    // known function (and called with the right arity) is
+                    // validated by the parser, not here.
+                    tokens.push(Token::Ident(s));
                 }
             }
             _ => return Err(anyhow!("Unexpected character: {}", c)),
@@ -482,6 +516,47 @@ impl Parser {
                     _ => Err(anyhow!("Expected closing ')'")),
                 }
             }
+            Some(Token::Ident(name)) => {
+                let name = name.clone();
+                self.consume();
+                match self.peek() {
+                    Some(Token::LParen) => self.consume(),
+                    _ => return Err(anyhow!("Expected '(' after function name '{}'", name)),
+                }
+
+                let mut args = Vec::new();
+                if !matches!(self.peek(), Some(Token::RParen)) {
+                    loop {
+                        args.push(self.parse_expr()?);
+                        match self.peek() {
+                            Some(Token::Comma) => {
+                                self.consume();
+                            }
+                            _ => break,
+                        }
+                    }
+                }
+                match self.peek() {
+                    Some(Token::RParen) => self.consume(),
+                    _ => return Err(anyhow!("Expected closing ')' in call to '{}'", name)),
+                }
+
+                let expected_arity = match name.as_str() {
+                    "contains" | "starts_with" | "ends_with" => 2,
+                    "lower" | "upper" => 1,
+                    other => return Err(anyhow!("Unknown function '{}'", other)),
+                };
+                if args.len() != expected_arity {
+                    return Err(anyhow!(
+                        "'{}' expects {} argument(s), got {}",
+                        name,
+                        expected_arity,
+                        args.len()
+                    ));
+                }
+
+                Ok(Expr::Call { name, args })
+            }
             Some(Token::Field(f)) => {
                 let f = f.clone();
                 self.consume();
@@ -593,8 +668,20 @@ mod tests {
     }
 
     #[test]
-    fn lex_rejects_unknown_keyword() {
-        assert!(lex("maybe").is_err());
+    fn lex_bare_word_is_an_identifier_not_an_error() {
+        // Bare alphabetic words are no longer rejected at the lexer level -
+        // they lex as identifiers (needed for function-call names like
+        // `contains`). Whether a given identifier is usable is a parser-level
+        // concern (see parse_rejects_bare_identifier_without_call below).
+        assert_eq!(
+            lex("maybe").unwrap(),
+            vec![Token::Ident("maybe".to_string())]
+        );
+    }
+
+    #[test]
+    fn parse_rejects_bare_identifier_without_call() {
+        assert!(parse("maybe").is_err());
     }
 
     // --- parser ---
@@ -920,5 +1007,136 @@ mod tests {
             parse("(true || false) && false").unwrap().evaluate(&rec),
             Value::Boolean(false)
         );
+    }
+
+    // --- string functions ---
+
+    #[test]
+    fn lex_function_call_tokens() {
+        let tokens = lex("contains(.a, \"x\")").unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Ident("contains".to_string()),
+                Token::LParen,
+                Token::Field("a".to_string()),
+                Token::Comma,
+                Token::StringLit("x".to_string()),
+                Token::RParen,
+            ]
+        );
+    }
+
+    #[test]
+    fn eval_contains() {
+        let rec = record_with(&[("name", Value::String("Alice Smith".to_string()))]);
+        assert_eq!(
+            parse(r#"contains(.name, "Smith")"#).unwrap().evaluate(&rec),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            parse(r#"contains(.name, "Jones")"#).unwrap().evaluate(&rec),
+            Value::Boolean(false)
+        );
+    }
+
+    #[test]
+    fn eval_starts_with_and_ends_with() {
+        let rec = record_with(&[("sku", Value::String("SKU-123".to_string()))]);
+        assert_eq!(
+            parse(r#"starts_with(.sku, "SKU-")"#)
+                .unwrap()
+                .evaluate(&rec),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            parse(r#"ends_with(.sku, "123")"#).unwrap().evaluate(&rec),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            parse(r#"ends_with(.sku, "999")"#).unwrap().evaluate(&rec),
+            Value::Boolean(false)
+        );
+    }
+
+    #[test]
+    fn eval_lower_and_upper() {
+        let rec = record_with(&[("name", Value::String("Alice".to_string()))]);
+        assert_eq!(
+            parse("lower(.name)").unwrap().evaluate(&rec),
+            Value::String("alice".to_string())
+        );
+        assert_eq!(
+            parse("upper(.name)").unwrap().evaluate(&rec),
+            Value::String("ALICE".to_string())
+        );
+    }
+
+    #[test]
+    fn eval_lower_used_in_comparison() {
+        let rec = record_with(&[("email", Value::String("ALICE@X.COM".to_string()))]);
+        assert_eq!(
+            parse(r#"lower(.email) == "alice@x.com""#)
+                .unwrap()
+                .evaluate(&rec),
+            Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn eval_function_call_on_nested_field() {
+        let mut user = IndexMap::new();
+        user.insert("name".to_string(), Value::String("Alice Smith".to_string()));
+        let rec = record_with(&[("user", Value::Object(user))]);
+        assert_eq!(
+            parse(r#"contains(.user.name, "Smith")"#)
+                .unwrap()
+                .evaluate(&rec),
+            Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn eval_function_call_combined_with_logical_operators() {
+        let rec = record_with(&[
+            ("name", Value::String("Alice".to_string())),
+            ("admin", Value::Boolean(false)),
+        ]);
+        assert_eq!(
+            parse(r#"contains(.name, "A") && !.admin"#)
+                .unwrap()
+                .evaluate(&rec),
+            Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn eval_string_function_on_non_string_operand_is_null() {
+        let rec = record_with(&[("age", Value::Integer(30))]);
+        assert_eq!(
+            parse(r#"contains(.age, "x")"#).unwrap().evaluate(&rec),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn parse_rejects_unknown_function_name() {
+        assert!(parse(r#"foo(.a)"#).is_err());
+    }
+
+    #[test]
+    fn parse_rejects_wrong_arity() {
+        assert!(parse("lower(.a, .b)").is_err());
+        assert!(parse("contains(.a)").is_err());
+    }
+
+    #[test]
+    fn parse_rejects_function_call_missing_parens() {
+        assert!(parse("lower .a").is_err());
+    }
+
+    #[test]
+    fn parse_function_call_with_no_args_is_arity_error() {
+        assert!(parse("lower()").is_err());
     }
 }

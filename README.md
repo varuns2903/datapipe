@@ -125,6 +125,7 @@ All binary operators are left-associative. Parentheses `( )` can be used to over
 - **Comparison:** `==`, `!=`, `<`, `>`, `<=`, `>=`
 - **Logical:** `&&`, `||` (both short-circuit), `!` (unary not)
 - **Arithmetic:** `+`, `-`, `*`, `/` on integers and floats (mixed int/float promotes to float). Division by zero evaluates to `null` rather than erroring. Arithmetic on incompatible types (e.g. `"a" + 1`) evaluates to `null`.
+- **String functions:** `contains(a, b)`, `starts_with(a, b)`, `ends_with(a, b)` (all return a boolean), and `lower(a)` / `upper(a)` (return a string). All operate on string values; a non-string operand evaluates to `null`. Function calls can be used anywhere an expression is expected, including as arguments to other functions or combined with `&&`/`||`/`!`.
 
 Examples:
 ```bash
@@ -133,6 +134,9 @@ dp filter '.status != "banned" || .admin == true'
 dp map total '.price * .quantity'
 dp filter '.address.city == "London"'
 dp filter '!(.status == "banned") && (.age >= 18 || .verified == true)'
+dp filter 'contains(.name, "Smith")'
+dp filter 'lower(.email) == "alice@example.com"'
+dp filter 'starts_with(.sku, "SKU-") && !ends_with(.sku, "-DISCONTINUED")'
 ```
 
 ## Error behavior
