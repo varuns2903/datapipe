@@ -34,6 +34,19 @@ pub fn run_cli() -> miette::Result<()> {
         return Ok(());
     }
 
+    // Same rationale as Completions above: no input records needed, and we
+    // buffer first so a closed downstream pipe doesn't turn into an error.
+    if matches!(cli.command, Command::Man) {
+        let cmd = Cli::command();
+        let man = clap_mangen::Man::new(cmd);
+        let mut buf = Vec::new();
+        man.render(&mut buf)
+            .map_err(|e| miette::miette!("Failed to render man page: {e}"))?;
+        use std::io::Write;
+        let _ = stdout().write_all(&buf);
+        return Ok(());
+    }
+
     let stdin_handle = stdin();
     let reader = BufReader::new(stdin_handle.lock());
     let stdout_handle = stdout();
@@ -126,7 +139,9 @@ pub fn run_cli() -> miette::Result<()> {
             }));
         }
         Command::Inspect | Command::Csv => {}
-        Command::Completions { .. } => unreachable!("handled above before pipeline setup"),
+        Command::Completions { .. } | Command::Man => {
+            unreachable!("handled above before pipeline setup")
+        }
     }
 
     let result_stream = pipeline.process(records);

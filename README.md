@@ -61,6 +61,15 @@ dp completions fish | source
 dp completions powershell | Out-String | Invoke-Expression
 ```
 
+### Man page
+
+`dp man` prints a troff-formatted man page to stdout:
+
+```bash
+dp man | gzip > dp.1.gz
+sudo mv dp.1.gz /usr/local/share/man/man1/
+```
+
 ## Quick Start
 
 Process a stream of JSON records, filter them, sort them, and output as CSV:
@@ -102,6 +111,7 @@ Run `dp <command> --help` for full details on any command below.
 
 ### Utility
 - `completions <shell>`: Prints a shell completion script for `bash`, `zsh`, `fish`, `powershell`, or `elvish`. See [Shell completions](#shell-completions).
+- `man`: Prints a troff-formatted man page. See [Man page](#man-page).
 
 ## Expressions
 

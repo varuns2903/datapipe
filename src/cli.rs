@@ -83,4 +83,6 @@ pub enum Command {
         #[arg(value_enum)]
         shell: Shell,
     },
+    /// Generate a troff man page and print it to stdout
+    Man,
 }

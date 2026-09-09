@@ -75,3 +75,29 @@ fn test_completions_does_not_read_stdin() {
     let mut cmd = Command::cargo_bin("dp").unwrap();
     cmd.arg("completions").arg("bash").assert().success();
 }
+
+#[test]
+fn test_man_page_uses_actual_binary_name() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("man")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(".TH dp 1"))
+        .stdout(predicate::str::contains("datapipe-cli").not());
+}
+
+#[test]
+fn test_man_page_lists_subcommands() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("man")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("dp\\-filter(1)"))
+        .stdout(predicate::str::contains("dp\\-completions(1)"));
+}
+
+#[test]
+fn test_man_page_does_not_read_stdin() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("man").assert().success();
+}

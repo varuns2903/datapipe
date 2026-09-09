@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `dp man` command generating a troff-formatted man page.
 - `dp completions <shell>` command generating completion scripts for bash,
   zsh, fish, PowerShell, and elvish.
 - `--strict` global flag to abort the pipeline on the first malformed record.
