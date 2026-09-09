@@ -59,9 +59,21 @@ pub fn read_csv_stream<'a, R: BufRead + 'a>(
         for (i, field) in string_record.iter().enumerate() {
             let header_name = headers.get(i).unwrap_or("unknown").to_string();
 
-            // Try to infer numbers, otherwise treat as string
+            // Try to infer numbers, otherwise treat as string.
+            //
+            // Integers are only inferred when the parsed value round-trips
+            // back to the exact original text. Without this check, values
+            // like zip codes ("00501") or phone numbers with a leading zero
+            // would silently lose that leading zero by being reparsed as the
+            // integer 501 - a real footgun for real-world CSV data. This
+            // check doesn't apply to floats, since fixed-decimal formatting
+            // like "19.99" or "5.00" is common and should still be numeric.
             let value = if let Ok(n) = field.parse::<i64>() {
-                Value::Integer(n)
+                if n.to_string() == field {
+                    Value::Integer(n)
+                } else {
+                    Value::String(field.to_string())
+                }
             } else if let Ok(f) = field.parse::<f64>() {
                 Value::Float(f)
             } else if field.eq_ignore_ascii_case("true") {
@@ -175,5 +187,60 @@ mod tests {
         let results = read_all("{\"a\":1}\nnot json\n");
         let err = results[1].as_ref().unwrap_err();
         assert!(err.to_string().contains("line 2"));
+    }
+
+    fn read_csv_all(input: &str) -> Vec<Record> {
+        read_csv_stream(Cursor::new(input.as_bytes()))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn csv_preserves_leading_zeros_as_string() {
+        let records = read_csv_all("zip\n00501\n");
+        assert_eq!(
+            records[0].get("zip"),
+            Some(&Value::String("00501".to_string()))
+        );
+    }
+
+    #[test]
+    fn csv_infers_plain_integer_without_leading_zero() {
+        let records = read_csv_all("age\n25\n");
+        assert_eq!(records[0].get("age"), Some(&Value::Integer(25)));
+    }
+
+    #[test]
+    fn csv_infers_zero_as_integer_not_string() {
+        let records = read_csv_all("n\n0\n");
+        assert_eq!(records[0].get("n"), Some(&Value::Integer(0)));
+    }
+
+    #[test]
+    fn csv_infers_negative_integer() {
+        let records = read_csv_all("n\n-5\n");
+        assert_eq!(records[0].get("n"), Some(&Value::Integer(-5)));
+    }
+
+    #[test]
+    fn csv_preserves_double_leading_zero_as_string() {
+        let records = read_csv_all("n\n00\n");
+        assert_eq!(records[0].get("n"), Some(&Value::String("00".to_string())));
+    }
+
+    #[test]
+    fn csv_still_infers_fixed_decimal_floats() {
+        // Trailing-zero decimal formatting (e.g. prices) is common and should
+        // still be treated as numeric, unlike the leading-zero integer case.
+        let records = read_csv_all("price\n5.00\n");
+        assert_eq!(records[0].get("price"), Some(&Value::Float(5.0)));
+    }
+
+    #[test]
+    fn csv_infers_booleans_and_nulls() {
+        let records = read_csv_all("active,note\ntrue,\n");
+        assert_eq!(records[0].get("active"), Some(&Value::Boolean(true)));
+        assert_eq!(records[0].get("note"), Some(&Value::Null));
     }
 }

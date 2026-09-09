@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Previously there was no way to express arbitrary grouping at all.
 
 ### Changed
+- `--in-csv` integer inference now requires the parsed value to round-trip
+  exactly back to the original text. Previously a zip code or phone number
+  with a leading zero (e.g. `"00501"`) would silently become the integer
+  `501`, losing the leading zero. Fixed-decimal floats (e.g. `"5.00"`) are
+  unaffected and still infer as numeric.
 - `sort`'s external-merge temp files are now kept alive for the full duration
   of reading (via `ExternalSortIter`) instead of being dropped immediately
   after opening each one. This removes a dependency on platform-specific

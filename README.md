@@ -79,7 +79,7 @@ Run `dp <command> --help` for full details on any command below.
 ### Schema & Formatting
 - `schema`: Inspects (up to the first 10,000 records of) the stream and infers the data types of all fields, e.g. `"integer | null"` if a field is sometimes explicitly `null`. A field that's simply absent from a record isn't counted for that record.
 - `csv`: Outputs the resulting stream as a CSV instead of JSONL. Array/object fields are rendered as `[complex]`.
-- `--in-csv`: A global flag to read the input as CSV instead of JSONL. CSV values are inferred as integer, float, boolean, or string.
+- `--in-csv`: A global flag to read the input as CSV instead of JSONL. CSV values are inferred as integer, float, boolean, or string. Integers are only inferred when they round-trip exactly (e.g. `"25"` → `25`), so values like zip codes or phone numbers with a leading zero (`"00501"`) are correctly kept as strings rather than silently losing that leading zero.
 - `--strict`: A global flag that aborts the whole pipeline on the first malformed record instead of the default behavior (skip it with a warning and continue). See [Error behavior](#error-behavior).
 
 ## Expressions
