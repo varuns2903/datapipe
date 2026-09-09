@@ -114,6 +114,12 @@ dp filter '!(.status == "banned") && (.age >= 18 || .verified == true)'
 - A missing `join` file fails with exit code `1`.
 - Success exits `0`, including when the output stream is empty (e.g. `count` on empty input yields `0`, `avg` on empty input yields `null`) or when records were skipped under the default (non-strict) mode.
 
+## Known limitations
+
+- **Integer precision beyond `i64`:** JSON integers larger than `i64::MAX` (~9.2 × 10¹⁸, about 19 digits) lose precision — they're silently represented as a 64-bit float instead of the exact integer. This can affect very large numeric IDs (some 64-bit unsigned or 128-bit identifiers). Regular integers, and floats in general, are unaffected.
+- **Hash-key collisions in `group`/`join`/`unique`:** these stages key non-string values by serializing them to a JSON string internally. Two different-typed values that happen to serialize identically could theoretically collide — an edge case that hasn't come up in practice but is worth knowing about if you're grouping/joining/deduplicating on a field with mixed or unusual types.
+- **No input size guard:** there's currently no limit on a single record's size before it's parsed. An extremely long single line (or field) will be read into memory in full before any pipeline stage runs. Worth keeping in mind if you're processing data from an untrusted source.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how to set up a dev environment and run the test suite.

@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operator, e.g. `!(.status == "banned") && (.age >= 18 || .verified == true)`.
   Previously there was no way to express arbitrary grouping at all.
 
+### Documentation
+- Added a "Known limitations" section to the README covering: integer
+  precision loss beyond `i64::MAX`, potential hash-key collisions in
+  `group`/`join`/`unique` (they key non-string values by JSON-serializing
+  them), and the lack of an input size guard for a single record/line.
+
 ### Changed
 - README no longer claims blanket "O(1) memory bounds" for the whole tool.
   `unique`, `group`, and `schema` hold state proportional to distinct key
