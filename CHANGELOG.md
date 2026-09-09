@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `--strict` global flag to abort the pipeline on the first malformed record.
+- Nested field access in `filter`/`map` expressions via dotted paths, e.g.
+  `.user.age` or `.a.b.c`. Previously only flat top-level fields were
+  supported, which was a significant gap given how common nested JSON is.
 
 ### Fixed
 - **Correctness bug**: aggregations (`count`, `sum`, `avg`, `min`, `max`, `group`,

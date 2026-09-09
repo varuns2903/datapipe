@@ -89,7 +89,7 @@ Run `dp <command> --help` for full details on any command below.
 **Precedence** (lowest to highest binding): `||` → `&&` → comparison (`== != > < >= <=`) → `+ -` → `* /`.
 All binary operators are left-associative. There is currently no support for parentheses or unary minus (`-5`) — only subtraction between two operands.
 
-- **Field access:** `.fieldname` — evaluates to `null` if the field is missing.
+- **Field access:** `.fieldname` — evaluates to `null` if the field is missing. Nested fields are supported via dotted paths, e.g. `.user.age`, which evaluates to `null` if any segment is missing or isn't an object.
 - **Literals:** strings (`"value"`), integers (`42`), floats (`3.5`), booleans (`true`/`false`).
 - **Comparison:** `==`, `!=`, `<`, `>`, `<=`, `>=`
 - **Logical:** `&&`, `||` (both short-circuit)
@@ -100,6 +100,7 @@ Examples:
 dp filter '.age >= 21 && .active == true'
 dp filter '.status != "banned" || .admin == true'
 dp map total '.price * .quantity'
+dp filter '.address.city == "London"'
 ```
 
 ## Error behavior

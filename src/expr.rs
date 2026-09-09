@@ -32,7 +32,20 @@ pub enum Expr {
 impl Expr {
     pub fn evaluate(&self, record: &Record) -> Value {
         match self {
-            Expr::FieldAccess(field) => record.get(field).cloned().unwrap_or(Value::Null),
+            Expr::FieldAccess(path) => {
+                let mut segments = path.split('.');
+                let Some(first) = segments.next() else {
+                    return Value::Null;
+                };
+                let mut current = record.get(first).cloned();
+                for segment in segments {
+                    current = match current {
+                        Some(Value::Object(map)) => map.get(segment).cloned(),
+                        _ => None,
+                    };
+                }
+                current.unwrap_or(Value::Null)
+            }
             Expr::Literal(val) => val.clone(),
             Expr::BinaryOp { op, left, right } => {
                 let l = left.evaluate(record);
@@ -185,14 +198,34 @@ pub fn lex(input: &str) -> Result<Vec<Token>> {
                         continue;
                     }
                 }
+                // Field access, e.g. `.age` or a nested path like `.user.age`.
+                // A `.` continues the path only when followed by an identifier
+                // character, so `.n.5` is not misread as a nested numeric key -
+                // that trailing `.5` is instead lexed as a float literal.
                 let mut field = String::new();
-                while let Some(&ch) = chars.peek() {
-                    if ch.is_alphanumeric() || ch == '_' {
-                        field.push(ch);
-                        chars.next();
-                    } else {
-                        break;
+                loop {
+                    let mut segment = String::new();
+                    while let Some(&ch) = chars.peek() {
+                        if ch.is_alphanumeric() || ch == '_' {
+                            segment.push(ch);
+                            chars.next();
+                        } else {
+                            break;
+                        }
                     }
+                    field.push_str(&segment);
+
+                    let mut lookahead = chars.clone();
+                    if lookahead.next() == Some('.') {
+                        if let Some(next_ch) = lookahead.next() {
+                            if next_ch.is_alphabetic() || next_ch == '_' {
+                                field.push('.');
+                                chars.next();
+                                continue;
+                            }
+                        }
+                    }
+                    break;
                 }
                 tokens.push(Token::Field(field));
             }
@@ -598,6 +631,62 @@ mod tests {
         let expr = parse(".missing == \"x\"").unwrap();
         let rec = record_with(&[]);
         assert_eq!(expr.evaluate(&rec), Value::Boolean(false));
+    }
+
+    // --- nested field access ---
+
+    fn nested_user_rec(age: i64) -> Record {
+        let mut user = IndexMap::new();
+        user.insert("age".to_string(), Value::Integer(age));
+        record_with(&[("user", Value::Object(user))])
+    }
+
+    #[test]
+    fn lex_nested_field_path() {
+        let tokens = lex(".user.age").unwrap();
+        assert_eq!(tokens, vec![Token::Field("user.age".to_string())]);
+    }
+
+    #[test]
+    fn eval_nested_field_access() {
+        let expr = parse(".user.age > 20").unwrap();
+        assert_eq!(expr.evaluate(&nested_user_rec(30)), Value::Boolean(true));
+        assert_eq!(expr.evaluate(&nested_user_rec(10)), Value::Boolean(false));
+    }
+
+    #[test]
+    fn eval_deeply_nested_field_access() {
+        let mut inner = IndexMap::new();
+        inner.insert("c".to_string(), Value::Integer(5));
+        let mut mid = IndexMap::new();
+        mid.insert("b".to_string(), Value::Object(inner));
+        let rec = record_with(&[("a", Value::Object(mid))]);
+
+        let expr = parse(".a.b.c == 5").unwrap();
+        assert_eq!(expr.evaluate(&rec), Value::Boolean(true));
+    }
+
+    #[test]
+    fn eval_nested_field_missing_leaf_is_null() {
+        let rec = record_with(&[("a", Value::Object(IndexMap::new()))]);
+        let expr = parse(".a.b").unwrap();
+        assert_eq!(expr.evaluate(&rec), Value::Null);
+    }
+
+    #[test]
+    fn eval_nested_field_through_non_object_is_null() {
+        // `.a` is an integer, not an object, so `.a.b` can't descend into it.
+        let rec = record_with(&[("a", Value::Integer(5))]);
+        let expr = parse(".a.b").unwrap();
+        assert_eq!(expr.evaluate(&rec), Value::Null);
+    }
+
+    #[test]
+    fn lex_float_literal_after_dot_is_unaffected_by_nested_path_support() {
+        // A `.` followed by a digit is still a float literal, not a nested
+        // path continuation (nested segments must start with a letter/underscore).
+        let tokens = lex(".5").unwrap();
+        assert_eq!(tokens, vec![Token::FloatLit(0.5)]);
     }
 
     #[test]
