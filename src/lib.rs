@@ -26,6 +26,21 @@ pub fn run_cli() -> miette::Result<()> {
         Box::new(crate::io::read_json_stream(reader))
     };
 
+    // By default, skip malformed records (with a warning) rather than letting
+    // one bad line abort the whole pipeline. `--strict` restores fail-fast
+    // behavior by leaving errors in the stream for the first consumer to bail on.
+    let records: crate::pipeline::RecordStream = if cli.strict {
+        records
+    } else {
+        Box::new(records.filter_map(|res| match res {
+            Ok(rec) => Some(Ok(rec)),
+            Err(e) => {
+                eprintln!("Warning: skipping malformed record: {e}");
+                None
+            }
+        }))
+    };
+
     let mut pipeline = Pipeline::new();
     let is_csv_out = matches!(cli.command, Command::Csv);
 

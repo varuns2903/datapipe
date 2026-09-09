@@ -29,3 +29,24 @@ fn test_missing_command() {
         .failure()
         .stderr(predicate::str::contains("Usage"));
 }
+
+#[test]
+fn test_malformed_line_is_skipped_by_default_and_processing_continues() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("count")
+        .write_stdin("{\"a\":1}\nnot json\n{\"a\":2}\n{\"a\":3}\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"count\":3"))
+        .stderr(predicate::str::contains("skipping malformed record"));
+}
+
+#[test]
+fn test_strict_mode_aborts_on_malformed_line() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("--strict")
+        .arg("count")
+        .write_stdin("{\"a\":1}\nnot json\n{\"a\":2}\n")
+        .assert()
+        .failure();
+}

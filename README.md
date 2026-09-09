@@ -80,6 +80,7 @@ Run `dp <command> --help` for full details on any command below.
 - `schema`: Inspects (up to the first 10,000 records of) the stream and infers the data types of all fields, e.g. `"integer | null"` if a field is sometimes explicitly `null`. A field that's simply absent from a record isn't counted for that record.
 - `csv`: Outputs the resulting stream as a CSV instead of JSONL. Array/object fields are rendered as `[complex]`.
 - `--in-csv`: A global flag to read the input as CSV instead of JSONL. CSV values are inferred as integer, float, boolean, or string.
+- `--strict`: A global flag that aborts the whole pipeline on the first malformed record instead of the default behavior (skip it with a warning and continue). See [Error behavior](#error-behavior).
 
 ## Expressions
 
@@ -103,12 +104,13 @@ dp map total '.price * .quantity'
 
 ## Error behavior
 
-- Malformed input (invalid JSON/CSV) fails the whole pipeline with a diagnostic error and exit code `1` — it does not skip the bad record and continue.
-- An invalid `filter`/`map` expression fails immediately with a syntax error and exit code `1`.
+- By default, a malformed record (invalid JSON/CSV) is **skipped with a warning printed to stderr**, and processing continues with the rest of the stream. This applies uniformly, including to aggregations like `count`/`sum`/`group` — a bad line is excluded from the result rather than corrupting it.
+- Pass the global `--strict` flag to abort the entire pipeline immediately on the first malformed record instead, with a diagnostic error and exit code `1`.
+- An invalid `filter`/`map` expression fails immediately with a syntax error and exit code `1` (expression syntax errors are always fatal, regardless of `--strict`).
 - A `filter`/`map` expression referencing a field that doesn't exist on a given record treats that field as `null` rather than erroring.
 - `sort`/`min`/`max`/etc. on a field that's missing on some records treats those as `null`, which sorts before all other types.
 - A missing `join` file fails with exit code `1`.
-- Success exits `0`, including when the output stream is empty (e.g. `count` on empty input yields `0`, `avg` on empty input yields `null`).
+- Success exits `0`, including when the output stream is empty (e.g. `count` on empty input yields `0`, `avg` on empty input yields `null`) or when records were skipped under the default (non-strict) mode.
 
 ## Contributing
 

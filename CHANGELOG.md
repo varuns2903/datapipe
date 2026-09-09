@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `--strict` global flag to abort the pipeline on the first malformed record.
+
+### Fixed
+- **Correctness bug**: aggregations (`count`, `sum`, `avg`, `min`, `max`, `group`,
+  `schema`) could silently produce wrong results on malformed input. `count`
+  specifically counted `Err` items as if they were valid records, and
+  `serde_json`'s streaming deserializer stopped yielding entirely after the
+  first parse error, silently dropping every valid record after a bad line.
+- `read_json_stream` now parses true line-delimited JSON (one `serde_json::from_str`
+  call per line) instead of a single continuous `Deserializer` stream, so a
+  malformed line no longer prevents subsequent valid lines from being read.
+- By default, a malformed record is now skipped with a warning on stderr and
+  processing continues, instead of the whole pipeline dying on the first bad
+  line with no way to process the rest of a large file.
+
 ## [0.1.1] - 2026-09-09
 
 ### Added

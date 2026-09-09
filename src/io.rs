@@ -1,14 +1,31 @@
 use crate::model::{Record, Value};
 use anyhow::Result;
-use serde_json::Deserializer;
 use std::io::{BufRead, Write};
 
 // JSON In
+//
+// Parses one JSON object per line (true JSONL semantics) rather than treating
+// the input as a single concatenated JSON value stream. This means a
+// malformed line only affects that line - unlike `serde_json::Deserializer`'s
+// streaming parser, which stops yielding entirely after the first parse
+// error, silently dropping every valid record that follows it.
 pub fn read_json_stream<'a, R: BufRead + 'a>(
     reader: R,
 ) -> impl Iterator<Item = Result<Record>> + 'a {
-    let stream = Deserializer::from_reader(reader).into_iter::<Record>();
-    stream.map(|res| res.map_err(|e| anyhow::anyhow!("JSON parse error: {}", e)))
+    reader.lines().enumerate().filter_map(|(i, line_res)| {
+        let line_no = i + 1;
+        let line = match line_res {
+            Ok(l) => l,
+            Err(e) => return Some(Err(anyhow::anyhow!("IO error reading line {line_no}: {e}"))),
+        };
+        if line.trim().is_empty() {
+            return None;
+        }
+        Some(
+            serde_json::from_str::<Record>(&line)
+                .map_err(|e| anyhow::anyhow!("JSON parse error on line {line_no}: {e}")),
+        )
+    })
 }
 
 // JSON Out
@@ -120,4 +137,43 @@ fn write_csv_row<W: Write>(
     }
     csv_writer.write_record(&row)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn read_all(input: &str) -> Vec<Result<Record>> {
+        read_json_stream(Cursor::new(input.as_bytes())).collect()
+    }
+
+    #[test]
+    fn read_json_stream_recovers_after_a_malformed_line() {
+        let results = read_all("{\"a\":1}\nnot json\n{\"a\":2}\n{\"a\":3}\n");
+        assert_eq!(results.len(), 4);
+        assert!(results[0].is_ok());
+        assert!(results[1].is_err());
+        // Records after the bad line must still be parsed - this is the
+        // behavior the previous serde_json::Deserializer-based streaming
+        // implementation did NOT provide (it stopped yielding entirely
+        // after the first error).
+        assert!(results[2].is_ok());
+        assert!(results[3].is_ok());
+    }
+
+    #[test]
+    fn read_json_stream_skips_blank_lines() {
+        let results = read_all("{\"a\":1}\n\n{\"a\":2}\n");
+        assert_eq!(results.len(), 2);
+        assert!(results[0].is_ok());
+        assert!(results[1].is_ok());
+    }
+
+    #[test]
+    fn read_json_stream_error_includes_line_number() {
+        let results = read_all("{\"a\":1}\nnot json\n");
+        let err = results[1].as_ref().unwrap_err();
+        assert!(err.to_string().contains("line 2"));
+    }
 }

@@ -7,6 +7,10 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub in_csv: bool,
 
+    /// Abort on the first malformed record instead of skipping it with a warning
+    #[arg(long, global = true)]
+    pub strict: bool,
+
     #[command(subcommand)]
     pub command: Command,
 }

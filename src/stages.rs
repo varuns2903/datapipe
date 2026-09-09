@@ -53,9 +53,15 @@ pub struct CountStage;
 
 impl Stage for CountStage {
     fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
-        let count = input.count();
+        let mut count = 0i64;
+        for res in input {
+            match res {
+                Ok(_) => count += 1,
+                Err(e) => return Box::new(std::iter::once(Err(e))),
+            }
+        }
         let mut rec = indexmap::IndexMap::new();
-        rec.insert("count".to_string(), Value::Integer(count as i64));
+        rec.insert("count".to_string(), Value::Integer(count));
         Box::new(std::iter::once(Ok(rec)))
     }
 }
@@ -71,7 +77,11 @@ impl Stage for SumStage {
         let mut sum_float = 0f64;
         let mut is_float = false;
 
-        for rec in input.flatten() {
+        for res in input {
+            let rec = match res {
+                Ok(rec) => rec,
+                Err(e) => return Box::new(std::iter::once(Err(e))),
+            };
             if let Some(val) = rec.get(&field) {
                 match val {
                     Value::Integer(i) => {
@@ -114,7 +124,11 @@ impl Stage for AvgStage {
         let mut sum = 0f64;
         let mut count = 0i64;
 
-        for rec in input.flatten() {
+        for res in input {
+            let rec = match res {
+                Ok(rec) => rec,
+                Err(e) => return Box::new(std::iter::once(Err(e))),
+            };
             if let Some(val) = rec.get(&field) {
                 match val {
                     Value::Integer(i) => {
@@ -150,7 +164,11 @@ impl Stage for MinStage {
         let field = self.field.clone();
         let mut min_val: Option<Value> = None;
 
-        for rec in input.flatten() {
+        for res in input {
+            let rec = match res {
+                Ok(rec) => rec,
+                Err(e) => return Box::new(std::iter::once(Err(e))),
+            };
             if let Some(val) = rec.get(&field) {
                 if let Some(ref current_min) = min_val {
                     if crate::model::cmp_values(val, current_min) == std::cmp::Ordering::Less {
@@ -177,7 +195,11 @@ impl Stage for MaxStage {
         let field = self.field.clone();
         let mut max_val: Option<Value> = None;
 
-        for rec in input.flatten() {
+        for res in input {
+            let rec = match res {
+                Ok(rec) => rec,
+                Err(e) => return Box::new(std::iter::once(Err(e))),
+            };
             if let Some(val) = rec.get(&field) {
                 if let Some(ref current_max) = max_val {
                     if crate::model::cmp_values(val, current_max) == std::cmp::Ordering::Greater {
@@ -416,7 +438,11 @@ impl Stage for SchemaStage {
         let mut field_types: indexmap::IndexMap<String, std::collections::HashSet<String>> =
             indexmap::IndexMap::new();
 
-        for rec in input.take(10_000).flatten() {
+        for res in input.take(10_000) {
+            let rec = match res {
+                Ok(rec) => rec,
+                Err(e) => return Box::new(std::iter::once(Err(e))),
+            };
             for (key, val) in rec {
                 let type_name = match val {
                     Value::Null => "null",
@@ -460,7 +486,11 @@ impl Stage for GroupStage {
         let mut groups: indexmap::IndexMap<String, (i64, f64, i64, bool)> =
             indexmap::IndexMap::new();
 
-        for rec in input.flatten() {
+        for res in input {
+            let rec = match res {
+                Ok(rec) => rec,
+                Err(e) => return Box::new(std::iter::once(Err(e))),
+            };
             let group_key = match rec.get(&by) {
                 Some(Value::String(s)) => s.clone(),
                 Some(val) => serde_json::to_string(val).unwrap_or_default(),
@@ -944,5 +974,70 @@ mod tests {
         let out = collect_ok(stage.process(input));
         assert_eq!(out[0].get("id"), Some(&Value::String("1".to_string())));
         assert_eq!(out[0].len(), 1);
+    }
+
+    // --- error propagation: aggregation stages must not silently drop/miscount
+    // malformed records that reach them (regression test for a bug where
+    // `.flatten()`/`.count()` counted or ignored Err items without reporting them) ---
+
+    fn stream_with_error(before: Vec<Record>, after: Vec<Record>) -> RecordStream<'static> {
+        let err = std::iter::once(Err(anyhow::anyhow!("boom")));
+        Box::new(
+            before
+                .into_iter()
+                .map(Ok)
+                .chain(err)
+                .chain(after.into_iter().map(Ok)),
+        )
+    }
+
+    #[test]
+    fn count_propagates_error_instead_of_miscounting() {
+        let input = stream_with_error(
+            vec![rec(&[("a", Value::Integer(1))])],
+            vec![rec(&[("a", Value::Integer(2))])],
+        );
+        let mut out = CountStage.process(input);
+        let result = out.next().unwrap();
+        assert!(result.is_err());
+        assert!(out.next().is_none());
+    }
+
+    #[test]
+    fn sum_propagates_error_instead_of_ignoring_it() {
+        let input = stream_with_error(
+            vec![rec(&[("n", Value::Integer(1))])],
+            vec![rec(&[("n", Value::Integer(2))])],
+        );
+        let stage = SumStage {
+            field: "n".to_string(),
+        };
+        let mut out = stage.process(input);
+        assert!(out.next().unwrap().is_err());
+    }
+
+    #[test]
+    fn group_propagates_error_instead_of_ignoring_it() {
+        let input = stream_with_error(
+            vec![rec(&[("k", Value::String("a".to_string()))])],
+            vec![rec(&[("k", Value::String("b".to_string()))])],
+        );
+        let stage = GroupStage {
+            by: "k".to_string(),
+            sum: None,
+            count: true,
+        };
+        let mut out = stage.process(input);
+        assert!(out.next().unwrap().is_err());
+    }
+
+    #[test]
+    fn schema_propagates_error_instead_of_ignoring_it() {
+        let input = stream_with_error(
+            vec![rec(&[("a", Value::Integer(1))])],
+            vec![rec(&[("a", Value::Integer(2))])],
+        );
+        let mut out = SchemaStage.process(input);
+        assert!(out.next().unwrap().is_err());
     }
 }
