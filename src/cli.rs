@@ -1,3 +1,4 @@
+use crate::stages::JoinType;
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
 
@@ -65,13 +66,16 @@ pub enum Command {
         #[arg(long)]
         count: bool,
     },
-    /// Left-join each record with a matching record from another file
+    /// Join each record with a matching record from another file
     Join {
         /// Path to a JSONL or CSV file to join against
         file: String,
         /// The field to join on (must exist in both streams)
         #[arg(long)]
         on: String,
+        /// The kind of join to perform
+        #[arg(long = "type", value_enum, default_value = "left")]
+        join_type: JoinType,
     },
     /// Explode an array field into multiple records
     Explode { field: String },

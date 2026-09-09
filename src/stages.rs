@@ -550,37 +550,113 @@ impl Stage for GroupStage {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub enum JoinType {
+    /// Keep every left record; merge matching right fields when found.
+    Left,
+    /// Keep only left records that have a matching right record.
+    Inner,
+    /// Keep every right record; merge matching left fields when found.
+    Right,
+    /// Keep every left AND every right record, matched where possible.
+    Full,
+}
+
 pub struct JoinStage {
     pub hash_map: std::sync::Arc<std::collections::HashMap<String, Record>>,
     pub on: String,
+    pub join_type: JoinType,
+}
+
+fn join_key_for(record: &Record, on: &str) -> Option<String> {
+    match record.get(on) {
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(val) => Some(serde_json::to_string(val).unwrap_or_default()),
+        None => None,
+    }
+}
+
+/// Streams left-side records first (merging in matching right-side fields,
+/// dropping or keeping unmatched lefts per `join_type`), then - for `Right`
+/// and `Full` - emits any right-side records that were never matched, once
+/// the left stream is exhausted. Tracking "which right keys matched" can
+/// only be known once the left stream is fully drained, so the right-only
+/// tail is computed lazily on first request rather than eagerly up front.
+struct JoinIter<'a> {
+    left: RecordStream<'a>,
+    hash_map: std::sync::Arc<std::collections::HashMap<String, Record>>,
+    on: String,
+    join_type: JoinType,
+    matched_keys: std::collections::HashSet<String>,
+    right_tail: Option<std::vec::IntoIter<anyhow::Result<Record>>>,
+}
+
+impl<'a> Iterator for JoinIter<'a> {
+    type Item = anyhow::Result<Record>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(tail) = &mut self.right_tail {
+            return tail.next();
+        }
+
+        for res in self.left.by_ref() {
+            let mut record = match res {
+                Ok(r) => r,
+                Err(e) => return Some(Err(e)),
+            };
+            let join_key = join_key_for(&record, &self.on);
+            let right_match = join_key.as_ref().and_then(|k| self.hash_map.get(k));
+
+            match right_match {
+                Some(right_record) => {
+                    if let Some(k) = join_key {
+                        self.matched_keys.insert(k);
+                    }
+                    for (k, v) in right_record {
+                        if k != &self.on {
+                            record.insert(k.clone(), v.clone());
+                        }
+                    }
+                    return Some(Ok(record));
+                }
+                None => {
+                    if matches!(self.join_type, JoinType::Inner | JoinType::Right) {
+                        continue; // drop unmatched left record
+                    }
+                    return Some(Ok(record));
+                }
+            }
+        }
+
+        // Left stream exhausted. For Right/Full, emit right-side records
+        // that were never matched by any left record.
+        if matches!(self.join_type, JoinType::Right | JoinType::Full) {
+            let leftover: Vec<_> = self
+                .hash_map
+                .iter()
+                .filter(|(k, _)| !self.matched_keys.contains(*k))
+                .map(|(_, rec)| Ok(rec.clone()))
+                .collect();
+            let mut tail = leftover.into_iter();
+            let first = tail.next();
+            self.right_tail = Some(tail);
+            first
+        } else {
+            None
+        }
+    }
 }
 
 impl Stage for JoinStage {
     fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
-        let hash_map = std::sync::Arc::clone(&self.hash_map);
-        let on = self.on.clone();
-
-        let iter = input.map(move |res| match res {
-            Ok(mut record) => {
-                let join_key = match record.get(&on) {
-                    Some(Value::String(s)) => s.clone(),
-                    Some(val) => serde_json::to_string(val).unwrap_or_default(),
-                    None => return Ok(record),
-                };
-
-                if let Some(right_record) = hash_map.get(&join_key) {
-                    for (k, v) in right_record {
-                        if k != &on {
-                            record.insert(k.clone(), v.clone());
-                        }
-                    }
-                }
-                Ok(record)
-            }
-            Err(e) => Err(e),
-        });
-
-        Box::new(iter)
+        Box::new(JoinIter {
+            left: input,
+            hash_map: std::sync::Arc::clone(&self.hash_map),
+            on: self.on.clone(),
+            join_type: self.join_type,
+            matched_keys: std::collections::HashSet::new(),
+            right_tail: None,
+        })
     }
 }
 
@@ -954,6 +1030,7 @@ mod tests {
         let stage = JoinStage {
             hash_map: std::sync::Arc::new(right),
             on: "id".to_string(),
+            join_type: JoinType::Left,
         };
 
         let input = stream(vec![rec(&[
@@ -974,12 +1051,118 @@ mod tests {
         let stage = JoinStage {
             hash_map: std::sync::Arc::new(right),
             on: "id".to_string(),
+            join_type: JoinType::Left,
         };
 
         let input = stream(vec![rec(&[("id", Value::String("1".to_string()))])]);
         let out = collect_ok(stage.process(input));
         assert_eq!(out[0].get("id"), Some(&Value::String("1".to_string())));
         assert_eq!(out[0].len(), 1);
+    }
+
+    fn join_test_right_map() -> std::sync::Arc<std::collections::HashMap<String, Record>> {
+        let mut right = std::collections::HashMap::new();
+        right.insert(
+            "1".to_string(),
+            rec(&[
+                ("id", Value::String("1".to_string())),
+                ("name", Value::String("Alice".to_string())),
+            ]),
+        );
+        right.insert(
+            "2".to_string(),
+            rec(&[
+                ("id", Value::String("2".to_string())),
+                ("name", Value::String("Bob".to_string())),
+            ]),
+        );
+        std::sync::Arc::new(right)
+    }
+
+    #[test]
+    fn inner_join_drops_unmatched_left_records() {
+        let stage = JoinStage {
+            hash_map: join_test_right_map(),
+            on: "id".to_string(),
+            join_type: JoinType::Inner,
+        };
+        let input = stream(vec![
+            rec(&[("id", Value::String("1".to_string()))]),
+            rec(&[("id", Value::String("999".to_string()))]),
+        ]);
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            out[0].get("name"),
+            Some(&Value::String("Alice".to_string()))
+        );
+    }
+
+    #[test]
+    fn right_join_drops_unmatched_left_and_appends_unmatched_right() {
+        let stage = JoinStage {
+            hash_map: join_test_right_map(),
+            on: "id".to_string(),
+            join_type: JoinType::Right,
+        };
+        // Left has id "1" (matches) and "999" (no match, must be dropped).
+        // Right has "1" (matched) and "2" (never matched, must appear at the end).
+        let input = stream(vec![
+            rec(&[
+                ("id", Value::String("1".to_string())),
+                ("order", Value::Integer(100)),
+            ]),
+            rec(&[("id", Value::String("999".to_string()))]),
+        ]);
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].get("order"), Some(&Value::Integer(100)));
+        assert_eq!(
+            out[0].get("name"),
+            Some(&Value::String("Alice".to_string()))
+        );
+        assert_eq!(out[1].get("name"), Some(&Value::String("Bob".to_string())));
+        assert_eq!(out[1].get("order"), None);
+    }
+
+    #[test]
+    fn full_join_keeps_unmatched_left_and_appends_unmatched_right() {
+        let stage = JoinStage {
+            hash_map: join_test_right_map(),
+            on: "id".to_string(),
+            join_type: JoinType::Full,
+        };
+        let input = stream(vec![
+            rec(&[
+                ("id", Value::String("1".to_string())),
+                ("order", Value::Integer(100)),
+            ]),
+            rec(&[("id", Value::String("999".to_string()))]),
+        ]);
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out.len(), 3);
+        // Matched left record, merged.
+        assert_eq!(
+            out[0].get("name"),
+            Some(&Value::String("Alice".to_string()))
+        );
+        // Unmatched left record, kept as-is.
+        assert_eq!(out[1].get("id"), Some(&Value::String("999".to_string())));
+        assert_eq!(out[1].get("name"), None);
+        // Unmatched right record, appended at the end.
+        assert_eq!(out[2].get("name"), Some(&Value::String("Bob".to_string())));
+    }
+
+    #[test]
+    fn full_join_on_empty_left_stream_yields_all_right_records() {
+        let stage = JoinStage {
+            hash_map: join_test_right_map(),
+            on: "id".to_string(),
+            join_type: JoinType::Full,
+        };
+        let input = stream(vec![]);
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out.len(), 2);
     }
 
     // --- error propagation: aggregation stages must not silently drop/miscount

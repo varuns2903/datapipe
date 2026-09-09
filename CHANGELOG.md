@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `join --type <left|inner|right|full>` flag. Previously `join` only
+  supported a left join; `inner`, `right`, and `full` are now available too.
 - String functions in `filter`/`map` expressions: `contains`, `starts_with`,
   `ends_with`, `lower`, `upper`, e.g. `contains(.name, "Smith")` or
   `lower(.email) == "alice@example.com"`. Previously there was no way to
@@ -22,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Parentheses `( )` to override expression precedence, and a unary `!` (not)
   operator, e.g. `!(.status == "banned") && (.age >= 18 || .verified == true)`.
   Previously there was no way to express arbitrary grouping at all.
+
+### Fixed
+- `join` silently dropped malformed records in the join file (`<file>`)
+  without any warning, via the same `.flatten()`-discards-errors pattern
+  fixed elsewhere in this release. It now respects `--strict`/the default
+  skip-with-warning behavior, consistent with the main stream.
 
 ### Documentation
 - Added a "Known limitations" section to the README covering: integer

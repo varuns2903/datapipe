@@ -111,7 +111,11 @@ pub fn run_cli() -> miette::Result<()> {
             })?;
             pipeline.add_stage(Box::new(MapStage { field, ast }));
         }
-        Command::Join { file, on } => {
+        Command::Join {
+            file,
+            on,
+            join_type,
+        } => {
             let f = std::fs::File::open(&file)
                 .map_err(|e| miette::miette!("Failed to open join file: {}", e))?;
             let reader = BufReader::new(f);
@@ -125,7 +129,17 @@ pub fn run_cli() -> miette::Result<()> {
             };
 
             let mut hash_map = std::collections::HashMap::new();
-            for rec in join_records.flatten() {
+            for res in join_records {
+                let rec = match res {
+                    Ok(rec) => rec,
+                    Err(e) if cli.strict => {
+                        return Err(miette::miette!("Malformed record in join file: {e}"));
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: skipping malformed record in join file: {e}");
+                        continue;
+                    }
+                };
                 let key = match rec.get(&on) {
                     Some(crate::model::Value::String(s)) => s.clone(),
                     Some(val) => serde_json::to_string(val).unwrap_or_default(),
@@ -136,6 +150,7 @@ pub fn run_cli() -> miette::Result<()> {
             pipeline.add_stage(Box::new(JoinStage {
                 hash_map: std::sync::Arc::new(hash_map),
                 on,
+                join_type,
             }));
         }
         Command::Inspect | Command::Csv => {}

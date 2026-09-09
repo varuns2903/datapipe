@@ -101,3 +101,47 @@ fn test_man_page_does_not_read_stdin() {
     let mut cmd = Command::cargo_bin("dp").unwrap();
     cmd.arg("man").assert().success();
 }
+
+#[test]
+fn test_join_type_full_appends_unmatched_right_records() {
+    let dir = tempfile::tempdir().unwrap();
+    let right_path = dir.path().join("right.jsonl");
+    std::fs::write(
+        &right_path,
+        "{\"id\":\"1\",\"name\":\"Alice\"}\n{\"id\":\"2\",\"name\":\"Bob\"}\n",
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("join")
+        .arg(right_path.to_str().unwrap())
+        .arg("--on")
+        .arg("id")
+        .arg("--type")
+        .arg("full")
+        .write_stdin("{\"id\":\"1\",\"order\":100}\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Alice"))
+        .stdout(predicate::str::contains("Bob"));
+}
+
+#[test]
+fn test_join_type_inner_drops_unmatched_left() {
+    let dir = tempfile::tempdir().unwrap();
+    let right_path = dir.path().join("right.jsonl");
+    std::fs::write(&right_path, "{\"id\":\"1\",\"name\":\"Alice\"}\n").unwrap();
+
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("join")
+        .arg(right_path.to_str().unwrap())
+        .arg("--on")
+        .arg("id")
+        .arg("--type")
+        .arg("inner")
+        .write_stdin("{\"id\":\"1\",\"order\":100}\n{\"id\":\"999\",\"order\":200}\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Alice"))
+        .stdout(predicate::str::contains("999").not());
+}

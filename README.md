@@ -88,7 +88,15 @@ Run `dp <command> --help` for full details on any command below.
 - `limit <max>`: Halts the stream after yielding `N` records.
 - `explode <field>`: Expands an array-valued field into one record per element. Records where the field isn't an array pass through unchanged.
 - `map <field> <expression>`: Computes a new field (or overwrites an existing one) using an expression.
-- `join <file> --on <field>`: Left-joins each record with a matching record from `<file>` (JSONL or CSV) on the given field. Non-matching records pass through unchanged.
+- `join <file> --on <field> [--type <left|inner|right|full>]`: Joins each record with a matching record from `<file>` (JSONL or CSV) on the given field. Defaults to `left`.
+  - `left` (default): keeps every record from the main stream; merges in matching fields from `<file>` when found, otherwise passes the record through unchanged.
+  - `inner`: keeps only records that have a match in `<file>`.
+  - `right`: keeps only records that have a match, then appends any record from `<file>` that was never matched (with no fields from the main stream).
+  - `full`: behaves like `left`, then also appends any unmatched record from `<file>` at the end (equivalent to left + the unmatched tail from right).
+
+  ```bash
+  dp join customers.jsonl --on customer_id --type inner
+  ```
 - `inspect`: Passes the stream through unchanged — useful for debugging where in a pipeline something goes wrong.
 
 ### Stateful Operations
@@ -146,7 +154,7 @@ dp filter 'starts_with(.sku, "SKU-") && !ends_with(.sku, "-DISCONTINUED")'
 - An invalid `filter`/`map` expression fails immediately with a syntax error and exit code `1` (expression syntax errors are always fatal, regardless of `--strict`).
 - A `filter`/`map` expression referencing a field that doesn't exist on a given record treats that field as `null` rather than erroring.
 - `sort`/`min`/`max`/etc. on a field that's missing on some records treats those as `null`, which sorts before all other types.
-- A missing `join` file fails with exit code `1`.
+- A missing `join` file fails with exit code `1`. A malformed record *within* the join file follows the same `--strict`/default behavior as the main stream (skipped with a warning by default, or aborts with `--strict`).
 - Success exits `0`, including when the output stream is empty (e.g. `count` on empty input yields `0`, `avg` on empty input yields `null`) or when records were skipped under the default (non-strict) mode.
 
 ## Known limitations
