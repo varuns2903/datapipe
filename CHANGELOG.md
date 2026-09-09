@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+- Documented that `join` loads its entire right-hand file into memory as a
+  hash table (same class of tradeoff as `unique`/`group`'s memory usage,
+  already documented) - fine for typical lookup-table sizes, not bounded
+  for huge join files. Considered a streaming sort-merge join instead but
+  scoped it out as a larger algorithmic change without clear demand yet.
+
 ### Added
 - `matches(a, "pattern")` regex function in `filter`/`map` expressions, e.g.
   `matches(.email, "^.+@example\.com$")`. The pattern must be a string

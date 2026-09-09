@@ -6,7 +6,7 @@ DataPipe is a streaming-first, Unix-inspired CLI for processing structured data 
 Instead of operating on raw text strings, `dp` operates on structured records natively, allowing you to filter, sort, aggregate, and transform gigabytes of data with a small memory footprint.
 
 ## Features
-- **Streaming by Default:** Transformation stages (`filter`, `select`, `limit`, `explode`, `map`) and simple single-value aggregations (`count`, `sum`, `avg`, `min`, `max`) process data lazily with O(1) memory, independent of input size. `sort` is memory-bounded too, via an external merge sort that spills to temp files rather than buffering the whole stream. **`unique`, `group`, and `schema` are the exception**: they hold state proportional to the number of *distinct* keys (or, for `schema`, up to the first 10,000 records) rather than the stream length — fine for typical cardinality, but not O(1) if you `unique`/`group` a field with an enormous number of distinct values (e.g. a UUID column over billions of rows).
+- **Streaming by Default:** Transformation stages (`filter`, `select`, `limit`, `explode`, `map`) and simple single-value aggregations (`count`, `sum`, `avg`, `min`, `max`) process data lazily with O(1) memory, independent of input size. `sort` is memory-bounded too, via an external merge sort that spills to temp files rather than buffering the whole stream. **`unique`, `group`, `schema`, and `join` are the exception**: they hold state proportional to the number of *distinct* keys (or, for `schema`, up to the first 10,000 records; for `join`, the entire right-hand file) rather than the main stream's length — fine for typical cardinality and typical lookup-table sizes, but not O(1) if you `unique`/`group` a field with an enormous number of distinct values, or `join` against a huge file (e.g. a UUID column over billions of rows, or a multi-GB join file).
 - **Unified Data Model:** Seamlessly pipe data between formats (`JSONL -> CSV` or `CSV -> JSONL`).
 - **Custom Expression Engine:** A handwritten, recursive descent parser allows for powerful conditional filtering (`.age > 25 && .admin == true`).
 - **Stateful Aggregations:** Easily compute statistics (`sum`, `avg`, `min`, `max`, `count`) directly in the shell.
@@ -88,7 +88,7 @@ Run `dp <command> --help` for full details on any command below.
 - `limit <max>`: Halts the stream after yielding `N` records.
 - `explode <field>`: Expands an array-valued field into one record per element. Records where the field isn't an array pass through unchanged.
 - `map <field> <expression>`: Computes a new field (or overwrites an existing one) using an expression.
-- `join <file> --on <field> [--type <left|inner|right|full>]`: Joins each record with a matching record from `<file>` (JSONL or CSV) on the given field. Defaults to `left`.
+- `join <file> --on <field> [--type <left|inner|right|full>]`: Joins each record with a matching record from `<file>` (JSONL or CSV) on the given field. Defaults to `left`. `<file>` is loaded entirely into memory as a hash table before the main stream starts, so memory usage is proportional to its size — fine for typical lookup-table-sized files, not bounded for huge ones.
   - `left` (default): keeps every record from the main stream; merges in matching fields from `<file>` when found, otherwise passes the record through unchanged.
   - `inner`: keeps only records that have a match in `<file>`.
   - `right`: keeps only records that have a match, then appends any record from `<file>` that was never matched (with no fields from the main stream).
