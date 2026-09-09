@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
+    /// Read the input as CSV instead of JSONL
     #[arg(long, global = true)]
     pub in_csv: bool,
 
@@ -12,59 +13,63 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
+    /// Keep only records where the expression evaluates to true
     Filter {
+        /// A boolean expression, e.g. `.age > 25 && .admin == true`
         expression: String,
     },
+    /// Keep only the specified comma-separated fields
     Select {
         #[arg(value_delimiter = ',')]
         fields: Vec<String>,
     },
-    Limit {
-        max: usize,
-    },
+    /// Halt the stream after yielding N records
+    Limit { max: usize },
+    /// Sort records by the specified field (buffers the full stream)
     Sort {
         field: String,
+        /// Sort in descending order
         #[arg(long)]
         desc: bool,
     },
-    Unique {
-        field: String,
-    },
+    /// Keep only the first record for each distinct value of a field
+    Unique { field: String },
+    /// Consume the stream and yield the total record count
     Count,
-    Sum {
-        field: String,
-    },
-    Avg {
-        field: String,
-    },
-    Min {
-        field: String,
-    },
-    Max {
-        field: String,
-    },
+    /// Compute the sum of a numeric field
+    Sum { field: String },
+    /// Compute the average of a numeric field
+    Avg { field: String },
+    /// Find the minimum value of a field
+    Min { field: String },
+    /// Find the maximum value of a field
+    Max { field: String },
+    /// Infer and print the data type(s) of every field in the stream
     Schema,
+    /// Pass the stream through unchanged (useful for debugging a pipeline)
     Inspect,
+    /// Output the stream as CSV instead of JSONL
     Csv,
+    /// Group records by a field, optionally summing another field and/or counting
     Group {
         by: String,
+        /// A numeric field to sum within each group
         #[arg(long)]
         sum: Option<String>,
+        /// Include a count of records in each group
         #[arg(long)]
         count: bool,
     },
+    /// Left-join each record with a matching record from another file
     Join {
+        /// Path to a JSONL or CSV file to join against
         file: String,
+        /// The field to join on (must exist in both streams)
         #[arg(long)]
         on: String,
     },
     /// Explode an array field into multiple records
-    Explode {
-        field: String,
-    },
+    Explode { field: String },
     /// Compute a new field or overwrite an existing one using an expression
-    Map {
-        field: String,
-        expression: String,
-    },
+    Map { field: String, expression: String },
 }

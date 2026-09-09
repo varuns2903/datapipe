@@ -55,7 +55,13 @@ pub fn run_cli() -> miette::Result<()> {
         }
         Command::Explode { field } => pipeline.add_stage(Box::new(ExplodeStage { field })),
         Command::Map { field, expression } => {
-            let ast = crate::expr::parse(&expression).unwrap();
+            let ast = crate::expr::parse(&expression).map_err(|e| {
+                if let Ok(diag) = e.downcast::<crate::error::DataPipeError>() {
+                    diag.into()
+                } else {
+                    miette::miette!("Failed to parse expression")
+                }
+            })?;
             pipeline.add_stage(Box::new(MapStage { field, ast }));
         }
         Command::Join { file, on } => {
