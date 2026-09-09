@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Previously there was no way to express arbitrary grouping at all.
 
 ### Changed
+- README no longer claims blanket "O(1) memory bounds" for the whole tool.
+  `unique`, `group`, and `schema` hold state proportional to distinct key
+  cardinality (or, for `schema`, up to the first 10,000 records), not O(1) -
+  this was always true but previously undocumented and inconsistent with the
+  README's headline claim.
 - `--in-csv` integer inference now requires the parsed value to round-trip
   exactly back to the original text. Previously a zip code or phone number
   with a leading zero (e.g. `"00501"`) would silently become the integer
