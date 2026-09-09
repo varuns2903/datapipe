@@ -1,9 +1,10 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
+use datapipe::expr::parse;
 use datapipe::io::read_json_stream;
 use datapipe::pipeline::Pipeline;
 use datapipe::stages::*;
+use std::hint::black_box;
 use std::io::Cursor;
-use datapipe::expr::parse;
 
 fn generate_mock_data(count: usize) -> Vec<u8> {
     let mut data = Vec::new();
@@ -22,11 +23,13 @@ fn bench_filter_pipeline(c: &mut Criterion) {
         b.iter(|| {
             let cursor = Cursor::new(black_box(&data));
             let records = Box::new(read_json_stream(cursor));
-            
+
             let mut pipeline = Pipeline::new();
-            pipeline.add_stage(Box::new(FilterStage { ast: parse(".age > 50").unwrap() }));
+            pipeline.add_stage(Box::new(FilterStage {
+                ast: parse(".age > 50").unwrap(),
+            }));
             pipeline.add_stage(Box::new(CountStage));
-            
+
             let result = pipeline.process(records);
             for rec in result {
                 black_box(rec.unwrap());

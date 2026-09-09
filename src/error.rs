@@ -19,11 +19,11 @@ pub enum DataPipeError {
     #[error(transparent)]
     #[diagnostic(code(datapipe::io))]
     IoError(#[from] std::io::Error),
-    
+
     #[error(transparent)]
     #[diagnostic(code(datapipe::json))]
     JsonError(#[from] serde_json::Error),
-    
+
     #[error("General Error: {0}")]
     General(String),
 }

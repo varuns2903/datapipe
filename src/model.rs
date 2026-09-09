@@ -17,24 +17,6 @@ pub enum Value {
 /// It is represented as an ordered map of field names to Values.
 pub type Record = IndexMap<String, Value>;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_value_equality() {
-        let mut obj1 = IndexMap::new();
-        obj1.insert("name".to_string(), Value::String("Alice".to_string()));
-        obj1.insert("age".to_string(), Value::Integer(30));
-
-        let mut obj2 = IndexMap::new();
-        obj2.insert("name".to_string(), Value::String("Alice".to_string()));
-        obj2.insert("age".to_string(), Value::Integer(30));
-
-        assert_eq!(Value::Object(obj1), Value::Object(obj2));
-    }
-}
-
 use std::cmp::Ordering;
 
 /// Provides a total ordering for Values so they can be sorted.
@@ -73,5 +55,23 @@ pub fn cmp_values(a: &Value, b: &Value) -> Ordering {
         (Value::Object(_), Value::Array(_)) => Ordering::Greater,
 
         _ => Ordering::Equal,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_value_equality() {
+        let mut obj1 = IndexMap::new();
+        obj1.insert("name".to_string(), Value::String("Alice".to_string()));
+        obj1.insert("age".to_string(), Value::Integer(30));
+
+        let mut obj2 = IndexMap::new();
+        obj2.insert("name".to_string(), Value::String("Alice".to_string()));
+        obj2.insert("age".to_string(), Value::Integer(30));
+
+        assert_eq!(Value::Object(obj1), Value::Object(obj2));
     }
 }
