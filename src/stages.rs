@@ -547,3 +547,402 @@ impl Stage for JoinStage {
         Box::new(iter)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use indexmap::IndexMap;
+
+    fn rec(pairs: &[(&str, Value)]) -> Record {
+        let mut r = IndexMap::new();
+        for (k, v) in pairs {
+            r.insert(k.to_string(), v.clone());
+        }
+        r
+    }
+
+    fn stream(records: Vec<Record>) -> RecordStream<'static> {
+        Box::new(records.into_iter().map(Ok))
+    }
+
+    fn collect_ok(s: RecordStream) -> Vec<Record> {
+        s.map(|r| r.unwrap()).collect()
+    }
+
+    #[test]
+    fn select_keeps_only_requested_fields_and_fills_missing_with_null() {
+        let input = stream(vec![rec(&[
+            ("a", Value::Integer(1)),
+            ("b", Value::Integer(2)),
+        ])]);
+        let stage = SelectStage {
+            fields: vec!["a".to_string(), "c".to_string()],
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].get("a"), Some(&Value::Integer(1)));
+        assert_eq!(out[0].get("c"), Some(&Value::Null));
+        assert_eq!(out[0].get("b"), None);
+    }
+
+    #[test]
+    fn limit_truncates_stream() {
+        let input = stream(vec![
+            rec(&[("a", Value::Integer(1))]),
+            rec(&[("a", Value::Integer(2))]),
+            rec(&[("a", Value::Integer(3))]),
+        ]);
+        let stage = LimitStage { max: 2 };
+        assert_eq!(collect_ok(stage.process(input)).len(), 2);
+    }
+
+    #[test]
+    fn limit_zero_yields_nothing() {
+        let input = stream(vec![rec(&[("a", Value::Integer(1))])]);
+        let stage = LimitStage { max: 0 };
+        assert_eq!(collect_ok(stage.process(input)).len(), 0);
+    }
+
+    #[test]
+    fn count_on_empty_stream_is_zero() {
+        let input = stream(vec![]);
+        let out = collect_ok(CountStage.process(input));
+        assert_eq!(out[0].get("count"), Some(&Value::Integer(0)));
+    }
+
+    #[test]
+    fn count_counts_all_records() {
+        let input = stream(vec![rec(&[]), rec(&[]), rec(&[])]);
+        let out = collect_ok(CountStage.process(input));
+        assert_eq!(out[0].get("count"), Some(&Value::Integer(3)));
+    }
+
+    #[test]
+    fn sum_integer_field() {
+        let input = stream(vec![
+            rec(&[("n", Value::Integer(2))]),
+            rec(&[("n", Value::Integer(3))]),
+        ]);
+        let stage = SumStage {
+            field: "n".to_string(),
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out[0].get("sum_n"), Some(&Value::Integer(5)));
+    }
+
+    #[test]
+    fn sum_mixed_int_and_float_upgrades_to_float() {
+        let input = stream(vec![
+            rec(&[("n", Value::Integer(2))]),
+            rec(&[("n", Value::Float(1.5))]),
+        ]);
+        let stage = SumStage {
+            field: "n".to_string(),
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out[0].get("sum_n"), Some(&Value::Float(3.5)));
+    }
+
+    #[test]
+    fn sum_ignores_non_numeric_and_missing_values() {
+        let input = stream(vec![
+            rec(&[("n", Value::String("x".to_string()))]),
+            rec(&[]),
+            rec(&[("n", Value::Integer(4))]),
+        ]);
+        let stage = SumStage {
+            field: "n".to_string(),
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out[0].get("sum_n"), Some(&Value::Integer(4)));
+    }
+
+    #[test]
+    fn avg_computes_mean() {
+        let input = stream(vec![
+            rec(&[("n", Value::Integer(2))]),
+            rec(&[("n", Value::Integer(4))]),
+        ]);
+        let stage = AvgStage {
+            field: "n".to_string(),
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out[0].get("avg_n"), Some(&Value::Float(3.0)));
+    }
+
+    #[test]
+    fn avg_on_empty_stream_is_null() {
+        let input = stream(vec![]);
+        let stage = AvgStage {
+            field: "n".to_string(),
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out[0].get("avg_n"), Some(&Value::Null));
+    }
+
+    #[test]
+    fn min_and_max_find_extremes() {
+        let input = || {
+            stream(vec![
+                rec(&[("n", Value::Integer(5))]),
+                rec(&[("n", Value::Integer(1))]),
+                rec(&[("n", Value::Integer(3))]),
+            ])
+        };
+        let min_out = collect_ok(
+            (MinStage {
+                field: "n".to_string(),
+            })
+            .process(input()),
+        );
+        assert_eq!(min_out[0].get("min_n"), Some(&Value::Integer(1)));
+
+        let max_out = collect_ok(
+            (MaxStage {
+                field: "n".to_string(),
+            })
+            .process(input()),
+        );
+        assert_eq!(max_out[0].get("max_n"), Some(&Value::Integer(5)));
+    }
+
+    #[test]
+    fn min_on_empty_stream_is_null() {
+        let input = stream(vec![]);
+        let stage = MinStage {
+            field: "n".to_string(),
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out[0].get("min_n"), Some(&Value::Null));
+    }
+
+    #[test]
+    fn sort_ascending() {
+        let input = stream(vec![
+            rec(&[("n", Value::Integer(3))]),
+            rec(&[("n", Value::Integer(1))]),
+            rec(&[("n", Value::Integer(2))]),
+        ]);
+        let stage = SortStage {
+            field: "n".to_string(),
+            desc: false,
+        };
+        let out = collect_ok(stage.process(input));
+        let values: Vec<_> = out.iter().map(|r| r.get("n").cloned().unwrap()).collect();
+        assert_eq!(
+            values,
+            vec![Value::Integer(1), Value::Integer(2), Value::Integer(3)]
+        );
+    }
+
+    #[test]
+    fn sort_descending() {
+        let input = stream(vec![
+            rec(&[("n", Value::Integer(1))]),
+            rec(&[("n", Value::Integer(3))]),
+            rec(&[("n", Value::Integer(2))]),
+        ]);
+        let stage = SortStage {
+            field: "n".to_string(),
+            desc: true,
+        };
+        let out = collect_ok(stage.process(input));
+        let values: Vec<_> = out.iter().map(|r| r.get("n").cloned().unwrap()).collect();
+        assert_eq!(
+            values,
+            vec![Value::Integer(3), Value::Integer(2), Value::Integer(1)]
+        );
+    }
+
+    #[test]
+    fn sort_on_empty_stream_yields_nothing() {
+        let input = stream(vec![]);
+        let stage = SortStage {
+            field: "n".to_string(),
+            desc: false,
+        };
+        assert_eq!(collect_ok(stage.process(input)).len(), 0);
+    }
+
+    #[test]
+    fn sort_across_multiple_external_chunks() {
+        // Exercise the external-merge path by exceeding the 50_000-record chunk size.
+        let n: i64 = 60_000;
+        let mut records = Vec::with_capacity(n as usize);
+        for i in (0..n).rev() {
+            records.push(rec(&[("n", Value::Integer(i))]));
+        }
+        let input = stream(records);
+        let stage = SortStage {
+            field: "n".to_string(),
+            desc: false,
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out.len(), n as usize);
+        for (i, r) in out.iter().enumerate() {
+            assert_eq!(r.get("n"), Some(&Value::Integer(i as i64)));
+        }
+    }
+
+    #[test]
+    fn explode_expands_array_field() {
+        let input = stream(vec![rec(&[
+            ("id", Value::Integer(1)),
+            (
+                "tags",
+                Value::Array(vec![
+                    Value::String("a".to_string()),
+                    Value::String("b".to_string()),
+                ]),
+            ),
+        ])]);
+        let stage = ExplodeStage {
+            field: "tags".to_string(),
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].get("tags"), Some(&Value::String("a".to_string())));
+        assert_eq!(out[1].get("tags"), Some(&Value::String("b".to_string())));
+    }
+
+    #[test]
+    fn explode_passes_through_non_array_field_unchanged() {
+        let input = stream(vec![rec(&[("id", Value::Integer(1))])]);
+        let stage = ExplodeStage {
+            field: "tags".to_string(),
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].get("id"), Some(&Value::Integer(1)));
+    }
+
+    #[test]
+    fn map_stage_sets_computed_field() {
+        let input = stream(vec![rec(&[("n", Value::Integer(5))])]);
+        let stage = MapStage {
+            field: "double".to_string(),
+            ast: crate::expr::parse(".n * 2").unwrap(),
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out[0].get("double"), Some(&Value::Integer(10)));
+    }
+
+    #[test]
+    fn unique_keeps_first_occurrence_per_value() {
+        let input = stream(vec![
+            rec(&[("id", Value::Integer(1))]),
+            rec(&[("id", Value::Integer(2))]),
+            rec(&[("id", Value::Integer(1))]),
+        ]);
+        let stage = UniqueStage {
+            field: "id".to_string(),
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].get("id"), Some(&Value::Integer(1)));
+        assert_eq!(out[1].get("id"), Some(&Value::Integer(2)));
+    }
+
+    #[test]
+    fn schema_infers_field_types() {
+        let input = stream(vec![
+            rec(&[
+                ("name", Value::String("a".to_string())),
+                ("age", Value::Integer(1)),
+            ]),
+            rec(&[
+                ("name", Value::String("b".to_string())),
+                ("age", Value::Null),
+            ]),
+        ]);
+        let out = collect_ok(SchemaStage.process(input));
+        assert_eq!(
+            out[0].get("name"),
+            Some(&Value::String("string".to_string()))
+        );
+        assert_eq!(
+            out[0].get("age"),
+            Some(&Value::String("integer | null".to_string()))
+        );
+    }
+
+    #[test]
+    fn group_by_counts_and_sums_per_key() {
+        let input = stream(vec![
+            rec(&[
+                ("category", Value::String("a".to_string())),
+                ("amount", Value::Integer(10)),
+            ]),
+            rec(&[
+                ("category", Value::String("a".to_string())),
+                ("amount", Value::Integer(5)),
+            ]),
+            rec(&[
+                ("category", Value::String("b".to_string())),
+                ("amount", Value::Integer(1)),
+            ]),
+        ]);
+        let stage = GroupStage {
+            by: "category".to_string(),
+            sum: Some("amount".to_string()),
+            count: true,
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out.len(), 2);
+
+        let group_a = out
+            .iter()
+            .find(|r| r.get("category") == Some(&Value::String("a".to_string())))
+            .unwrap();
+        assert_eq!(group_a.get("count"), Some(&Value::Integer(2)));
+        assert_eq!(group_a.get("sum_amount"), Some(&Value::Integer(15)));
+
+        let group_b = out
+            .iter()
+            .find(|r| r.get("category") == Some(&Value::String("b".to_string())))
+            .unwrap();
+        assert_eq!(group_b.get("count"), Some(&Value::Integer(1)));
+        assert_eq!(group_b.get("sum_amount"), Some(&Value::Integer(1)));
+    }
+
+    #[test]
+    fn join_merges_matching_right_record_fields() {
+        let mut right = std::collections::HashMap::new();
+        right.insert(
+            "1".to_string(),
+            rec(&[
+                ("id", Value::String("1".to_string())),
+                ("name", Value::String("Alice".to_string())),
+            ]),
+        );
+        let stage = JoinStage {
+            hash_map: std::sync::Arc::new(right),
+            on: "id".to_string(),
+        };
+
+        let input = stream(vec![rec(&[
+            ("id", Value::String("1".to_string())),
+            ("order", Value::Integer(100)),
+        ])]);
+        let out = collect_ok(stage.process(input));
+        assert_eq!(
+            out[0].get("name"),
+            Some(&Value::String("Alice".to_string()))
+        );
+        assert_eq!(out[0].get("order"), Some(&Value::Integer(100)));
+    }
+
+    #[test]
+    fn join_leaves_record_unchanged_when_no_match() {
+        let right: std::collections::HashMap<String, Record> = std::collections::HashMap::new();
+        let stage = JoinStage {
+            hash_map: std::sync::Arc::new(right),
+            on: "id".to_string(),
+        };
+
+        let input = stream(vec![rec(&[("id", Value::String("1".to_string()))])]);
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out[0].get("id"), Some(&Value::String("1".to_string())));
+        assert_eq!(out[0].len(), 1);
+    }
+}

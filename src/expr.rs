@@ -446,3 +446,243 @@ impl Parser {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use indexmap::IndexMap;
+
+    fn record_with(pairs: &[(&str, Value)]) -> Record {
+        let mut rec = IndexMap::new();
+        for (k, v) in pairs {
+            rec.insert(k.to_string(), v.clone());
+        }
+        rec
+    }
+
+    // --- lexer ---
+
+    #[test]
+    fn lex_field_access() {
+        let tokens = lex(".age").unwrap();
+        assert_eq!(tokens, vec![Token::Field("age".to_string())]);
+    }
+
+    #[test]
+    fn lex_all_operators() {
+        let tokens = lex("== != > < >= <= && || + - * /").unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::EqEq,
+                Token::NotEq,
+                Token::Gt,
+                Token::Lt,
+                Token::GtEq,
+                Token::LtEq,
+                Token::And,
+                Token::Or,
+                Token::Plus,
+                Token::Minus,
+                Token::Star,
+                Token::Slash,
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_string_int_float_bool_literals() {
+        let tokens = lex(r#""hi" 42 3.5 true false"#).unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::StringLit("hi".to_string()),
+                Token::IntLit(42),
+                Token::FloatLit(3.5),
+                Token::BoolLit(true),
+                Token::BoolLit(false),
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_leading_dot_float() {
+        // ".5" is a float literal, not field access, since a digit follows the dot.
+        let tokens = lex(".5").unwrap();
+        assert_eq!(tokens, vec![Token::FloatLit(0.5)]);
+    }
+
+    #[test]
+    fn lex_rejects_unexpected_character() {
+        assert!(lex("@").is_err());
+    }
+
+    #[test]
+    fn lex_rejects_lone_equals() {
+        assert!(lex("=").is_err());
+    }
+
+    #[test]
+    fn lex_rejects_lone_ampersand() {
+        assert!(lex("&").is_err());
+    }
+
+    #[test]
+    fn lex_rejects_unknown_keyword() {
+        assert!(lex("maybe").is_err());
+    }
+
+    // --- parser ---
+
+    #[test]
+    fn parse_rejects_empty_expression() {
+        assert!(parse("").is_err());
+    }
+
+    #[test]
+    fn parse_rejects_trailing_tokens() {
+        assert!(parse(".age 42").is_err());
+    }
+
+    #[test]
+    fn parse_rejects_incomplete_expression() {
+        assert!(parse(".age ==").is_err());
+    }
+
+    #[test]
+    fn parse_and_has_higher_precedence_than_or() {
+        // "true || false && false" should parse as "true || (false && false)" => true
+        let expr = parse("true || false && false").unwrap();
+        let rec = record_with(&[]);
+        assert_eq!(expr.evaluate(&rec), Value::Boolean(true));
+    }
+
+    #[test]
+    fn parse_arithmetic_has_higher_precedence_than_comparison() {
+        // "1 + 2 > 2" should parse as "(1 + 2) > 2" => true
+        let expr = parse("1 + 2 > 2").unwrap();
+        let rec = record_with(&[]);
+        assert_eq!(expr.evaluate(&rec), Value::Boolean(true));
+    }
+
+    #[test]
+    fn parse_mul_has_higher_precedence_than_add() {
+        // "2 + 3 * 4" should parse as "2 + (3 * 4)" => 14
+        let expr = parse("2 + 3 * 4").unwrap();
+        let rec = record_with(&[]);
+        assert_eq!(expr.evaluate(&rec), Value::Integer(14));
+    }
+
+    #[test]
+    fn parse_and_or_left_associative() {
+        // "true && true && false" => false
+        let expr = parse("true && true && false").unwrap();
+        let rec = record_with(&[]);
+        assert_eq!(expr.evaluate(&rec), Value::Boolean(false));
+    }
+
+    // --- evaluate: comparisons ---
+
+    #[test]
+    fn eval_field_gt_int_literal() {
+        let expr = parse(".age > 25").unwrap();
+        let rec = record_with(&[("age", Value::Integer(30))]);
+        assert_eq!(expr.evaluate(&rec), Value::Boolean(true));
+
+        let rec2 = record_with(&[("age", Value::Integer(20))]);
+        assert_eq!(expr.evaluate(&rec2), Value::Boolean(false));
+    }
+
+    #[test]
+    fn eval_missing_field_is_null() {
+        let expr = parse(".missing == \"x\"").unwrap();
+        let rec = record_with(&[]);
+        assert_eq!(expr.evaluate(&rec), Value::Boolean(false));
+    }
+
+    #[test]
+    fn eval_string_equality() {
+        let expr = parse(r#".name == "Alice""#).unwrap();
+        let rec = record_with(&[("name", Value::String("Alice".to_string()))]);
+        assert_eq!(expr.evaluate(&rec), Value::Boolean(true));
+    }
+
+    #[test]
+    fn eval_not_eq() {
+        let expr = parse(".age != 30").unwrap();
+        let rec = record_with(&[("age", Value::Integer(30))]);
+        assert_eq!(expr.evaluate(&rec), Value::Boolean(false));
+    }
+
+    #[test]
+    fn eval_and_short_circuits_without_evaluating_missing_field() {
+        // If short-circuit works, ".missing == 1" on the right is never reached
+        // to cause a panic, and the overall result is false because the left is false.
+        let expr = parse(".flag == true && .missing == 1").unwrap();
+        let rec = record_with(&[("flag", Value::Boolean(false))]);
+        assert_eq!(expr.evaluate(&rec), Value::Boolean(false));
+    }
+
+    #[test]
+    fn eval_or_short_circuits() {
+        let expr = parse(".flag == true || .missing == 1").unwrap();
+        let rec = record_with(&[("flag", Value::Boolean(true))]);
+        assert_eq!(expr.evaluate(&rec), Value::Boolean(true));
+    }
+
+    // --- evaluate: arithmetic ---
+
+    #[test]
+    fn eval_integer_arithmetic() {
+        let rec = record_with(&[]);
+        assert_eq!(parse("2 + 3").unwrap().evaluate(&rec), Value::Integer(5));
+        assert_eq!(parse("5 - 3").unwrap().evaluate(&rec), Value::Integer(2));
+        assert_eq!(parse("4 * 3").unwrap().evaluate(&rec), Value::Integer(12));
+        assert_eq!(parse("10 / 2").unwrap().evaluate(&rec), Value::Integer(5));
+    }
+
+    #[test]
+    fn eval_float_arithmetic() {
+        let rec = record_with(&[]);
+        assert_eq!(
+            parse("1.5 + 2.5").unwrap().evaluate(&rec),
+            Value::Float(4.0)
+        );
+    }
+
+    #[test]
+    fn eval_mixed_int_float_arithmetic() {
+        let rec = record_with(&[]);
+        assert_eq!(parse("1 + 2.5").unwrap().evaluate(&rec), Value::Float(3.5));
+        assert_eq!(parse("2.5 + 1").unwrap().evaluate(&rec), Value::Float(3.5));
+    }
+
+    #[test]
+    fn eval_integer_division_by_zero_is_null() {
+        let rec = record_with(&[]);
+        assert_eq!(parse("10 / 0").unwrap().evaluate(&rec), Value::Null);
+    }
+
+    #[test]
+    fn eval_float_division_by_zero_is_null() {
+        let rec = record_with(&[]);
+        assert_eq!(parse("10.0 / 0.0").unwrap().evaluate(&rec), Value::Null);
+    }
+
+    #[test]
+    fn eval_arithmetic_on_incompatible_types_is_null() {
+        let expr = parse(r#""a" + 1"#).unwrap();
+        let rec = record_with(&[]);
+        assert_eq!(expr.evaluate(&rec), Value::Null);
+    }
+
+    #[test]
+    fn eval_complex_expression() {
+        let expr = parse(".age >= 21 && .active == true").unwrap();
+        let rec = record_with(&[
+            ("age", Value::Integer(25)),
+            ("active", Value::Boolean(true)),
+        ]);
+        assert_eq!(expr.evaluate(&rec), Value::Boolean(true));
+    }
+}
