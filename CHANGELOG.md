@@ -7,18 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-09
+
 ### Added
 - `LICENSE` file (MIT).
 - CI workflow (`fmt`, `clippy`, `test` matrix across Linux/macOS/Windows, `cargo-audit`).
 - Release automation via `cargo-dist`: tagged pushes build cross-platform binaries
   (Linux x86_64/aarch64, macOS x86_64/aarch64, Windows x86_64) and publish them to
   GitHub Releases with shell/PowerShell installers and checksums.
+- Homebrew tap publishing (`varuns2903/homebrew-tap`) on release.
 - Unit test coverage for the expression parser (`expr.rs`) and all pipeline stages
   (`stages.rs`), including the external-merge sort path.
+- `CONTRIBUTING.md`, an expression grammar reference, and documented error/exit-code
+  behavior in the README. `--help` doc comments for every subcommand.
+- Documented previously-undocumented commands: `unique`, `group`, `join`, `explode`,
+  `map`, `inspect`.
 
 ### Fixed
 - CLI integration tests referenced the old binary name `datapipe` instead of `dp`.
 - Various clippy warnings and a deprecated `criterion::black_box` usage.
+- `map` with an invalid expression panicked (exit 101) instead of failing gracefully
+  (exit 1) like `filter` does.
 
 ### Changed
 - `Cargo.lock` is now committed for reproducible binary builds.
