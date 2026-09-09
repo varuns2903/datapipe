@@ -660,6 +660,107 @@ impl Stage for JoinStage {
     }
 }
 
+pub struct RenameStage {
+    /// (old_name, new_name) pairs.
+    pub renames: Vec<(String, String)>,
+}
+
+impl Stage for RenameStage {
+    fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
+        let renames = self.renames.clone();
+        let iter = input.map(move |res| {
+            res.map(|record| {
+                let mut new_record = indexmap::IndexMap::new();
+                for (key, val) in record {
+                    let new_key = renames
+                        .iter()
+                        .find(|(old, _)| old == &key)
+                        .map(|(_, new)| new.clone())
+                        .unwrap_or(key);
+                    new_record.insert(new_key, val);
+                }
+                new_record
+            })
+        });
+        Box::new(iter)
+    }
+}
+
+pub struct FlattenStage {
+    pub separator: String,
+}
+
+fn flatten_into(
+    out: &mut Record,
+    prefix: &str,
+    map: &indexmap::IndexMap<String, Value>,
+    sep: &str,
+) {
+    for (key, val) in map {
+        let flat_key = if prefix.is_empty() {
+            key.clone()
+        } else {
+            format!("{prefix}{sep}{key}")
+        };
+        match val {
+            // Only nested objects are flattened; arrays are left as-is (use
+            // `explode` for those) - flattening arrays would require
+            // index-based keys, a different and separately useful operation.
+            Value::Object(inner) => flatten_into(out, &flat_key, inner, sep),
+            other => {
+                out.insert(flat_key, other.clone());
+            }
+        }
+    }
+}
+
+impl Stage for FlattenStage {
+    fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
+        let sep = self.separator.clone();
+        let iter = input.map(move |res| {
+            res.map(|record| {
+                let mut out = indexmap::IndexMap::new();
+                flatten_into(&mut out, "", &record, &sep);
+                out
+            })
+        });
+        Box::new(iter)
+    }
+}
+
+pub struct SampleStage {
+    pub n: usize,
+}
+
+impl Stage for SampleStage {
+    fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
+        // Reservoir sampling (Algorithm R): a single streaming pass yields a
+        // uniformly random sample of `n` records without knowing the total
+        // stream length in advance, using O(n) memory.
+        use rand::RngExt;
+        let mut rng = rand::rng();
+        let mut reservoir: Vec<Record> = Vec::with_capacity(self.n);
+
+        for (idx, res) in input.enumerate() {
+            let rec = match res {
+                Ok(r) => r,
+                Err(e) => return Box::new(std::iter::once(Err(e))),
+            };
+            let seen = idx + 1; // 1-indexed count of records seen so far
+            if reservoir.len() < self.n {
+                reservoir.push(rec);
+            } else if self.n > 0 {
+                let j = rng.random_range(0..seen);
+                if j < self.n {
+                    reservoir[j] = rec;
+                }
+            }
+        }
+
+        Box::new(reservoir.into_iter().map(Ok))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1163,6 +1264,121 @@ mod tests {
         let input = stream(vec![]);
         let out = collect_ok(stage.process(input));
         assert_eq!(out.len(), 2);
+    }
+
+    // --- rename / flatten / sample ---
+
+    #[test]
+    fn rename_renames_matching_fields_and_leaves_others_untouched() {
+        let input = stream(vec![rec(&[
+            ("a", Value::Integer(1)),
+            ("b", Value::Integer(2)),
+        ])]);
+        let stage = RenameStage {
+            renames: vec![("a".to_string(), "x".to_string())],
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out[0].get("x"), Some(&Value::Integer(1)));
+        assert_eq!(out[0].get("a"), None);
+        assert_eq!(out[0].get("b"), Some(&Value::Integer(2)));
+    }
+
+    #[test]
+    fn rename_preserves_field_order() {
+        let input = stream(vec![rec(&[
+            ("a", Value::Integer(1)),
+            ("b", Value::Integer(2)),
+            ("c", Value::Integer(3)),
+        ])]);
+        let stage = RenameStage {
+            renames: vec![("b".to_string(), "z".to_string())],
+        };
+        let out = collect_ok(stage.process(input));
+        let keys: Vec<_> = out[0].keys().cloned().collect();
+        assert_eq!(
+            keys,
+            vec!["a".to_string(), "z".to_string(), "c".to_string()]
+        );
+    }
+
+    #[test]
+    fn flatten_joins_nested_object_keys_with_default_separator() {
+        let mut user = IndexMap::new();
+        user.insert("name".to_string(), Value::String("Alice".to_string()));
+        user.insert("age".to_string(), Value::Integer(30));
+        let input = stream(vec![rec(&[
+            ("user", Value::Object(user)),
+            ("active", Value::Boolean(true)),
+        ])]);
+        let stage = FlattenStage {
+            separator: ".".to_string(),
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(
+            out[0].get("user.name"),
+            Some(&Value::String("Alice".to_string()))
+        );
+        assert_eq!(out[0].get("user.age"), Some(&Value::Integer(30)));
+        assert_eq!(out[0].get("active"), Some(&Value::Boolean(true)));
+        assert_eq!(out[0].get("user"), None);
+    }
+
+    #[test]
+    fn flatten_handles_deep_nesting_and_custom_separator() {
+        let mut inner = IndexMap::new();
+        inner.insert("c".to_string(), Value::Integer(1));
+        let mut mid = IndexMap::new();
+        mid.insert("b".to_string(), Value::Object(inner));
+        let input = stream(vec![rec(&[("a", Value::Object(mid))])]);
+        let stage = FlattenStage {
+            separator: "_".to_string(),
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out[0].get("a_b_c"), Some(&Value::Integer(1)));
+    }
+
+    #[test]
+    fn flatten_leaves_arrays_unflattened() {
+        let input = stream(vec![rec(&[(
+            "tags",
+            Value::Array(vec![Value::Integer(1), Value::Integer(2)]),
+        )])]);
+        let stage = FlattenStage {
+            separator: ".".to_string(),
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(
+            out[0].get("tags"),
+            Some(&Value::Array(vec![Value::Integer(1), Value::Integer(2)]))
+        );
+    }
+
+    #[test]
+    fn sample_yields_exactly_n_records_when_stream_is_larger() {
+        let records: Vec<_> = (0..100).map(|i| rec(&[("n", Value::Integer(i))])).collect();
+        let input = stream(records);
+        let stage = SampleStage { n: 10 };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out.len(), 10);
+    }
+
+    #[test]
+    fn sample_yields_every_record_when_n_exceeds_stream_length() {
+        let input = stream(vec![
+            rec(&[("a", Value::Integer(1))]),
+            rec(&[("a", Value::Integer(2))]),
+        ]);
+        let stage = SampleStage { n: 10 };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn sample_of_zero_yields_nothing() {
+        let input = stream(vec![rec(&[("a", Value::Integer(1))])]);
+        let stage = SampleStage { n: 0 };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out.len(), 0);
     }
 
     // --- error propagation: aggregation stages must not silently drop/miscount

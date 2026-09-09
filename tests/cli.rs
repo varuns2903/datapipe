@@ -145,3 +145,42 @@ fn test_join_type_inner_drops_unmatched_left() {
         .stdout(predicate::str::contains("Alice"))
         .stdout(predicate::str::contains("999").not());
 }
+
+#[test]
+fn test_rename_command() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("rename")
+        .arg("old_name:name")
+        .write_stdin("{\"old_name\":\"Alice\"}\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"name\":\"Alice\""))
+        .stdout(predicate::str::contains("old_name").not());
+}
+
+#[test]
+fn test_flatten_command() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("flatten")
+        .write_stdin("{\"user\":{\"name\":\"Alice\"}}\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"user.name\":\"Alice\""));
+}
+
+#[test]
+fn test_sample_command_respects_n() {
+    let stdin: String = (0..50).map(|i| format!("{{\"n\":{}}}\n", i)).collect();
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    let output = cmd
+        .arg("sample")
+        .arg("5")
+        .write_stdin(stdin)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let line_count = String::from_utf8(output).unwrap().lines().count();
+    assert_eq!(line_count, 5);
+}

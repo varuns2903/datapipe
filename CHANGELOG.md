@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `rename <old:new,...>` command to rename one or more fields.
+- `flatten [--sep <sep>]` command to flatten nested objects into dot-path
+  keys, e.g. `{"user":{"name":"Alice"}}` -> `{"user.name":"Alice"}`. Useful
+  before `csv` output, since nested objects otherwise render as `[complex]`.
+- `sample <n>` command for uniform random sampling via reservoir sampling
+  (single streaming pass, O(n) memory, no need to know stream length up
+  front). Added the `rand` crate as a dependency for this.
 - `in` membership operator in `filter`/`map` expressions, e.g.
   `.status in ("active", "pending")`. Works with any value type, not just
   strings. Factored out a shared parenthesized-list parser reused by both

@@ -79,6 +79,19 @@ pub enum Command {
     },
     /// Explode an array field into multiple records
     Explode { field: String },
+    /// Rename one or more fields, e.g. `old1:new1,old2:new2`
+    Rename {
+        #[arg(value_delimiter = ',')]
+        renames: Vec<String>,
+    },
+    /// Flatten nested objects into dot-path keys, e.g. .user.age -> "user.age"
+    Flatten {
+        /// The separator to join path segments with
+        #[arg(long, default_value = ".")]
+        sep: String,
+    },
+    /// Take a uniform random sample of N records (buffers up to N records)
+    Sample { n: usize },
     /// Compute a new field or overwrite an existing one using an expression
     Map { field: String, expression: String },
     /// Generate a shell completion script and print it to stdout

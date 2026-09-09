@@ -101,6 +101,18 @@ pub fn run_cli() -> miette::Result<()> {
             pipeline.add_stage(Box::new(GroupStage { by, sum, count }))
         }
         Command::Explode { field } => pipeline.add_stage(Box::new(ExplodeStage { field })),
+        Command::Rename { renames } => {
+            let mut pairs = Vec::with_capacity(renames.len());
+            for entry in renames {
+                let (old, new) = entry.split_once(':').ok_or_else(|| {
+                    miette::miette!("Invalid rename '{}': expected format old:new", entry)
+                })?;
+                pairs.push((old.to_string(), new.to_string()));
+            }
+            pipeline.add_stage(Box::new(RenameStage { renames: pairs }));
+        }
+        Command::Flatten { sep } => pipeline.add_stage(Box::new(FlattenStage { separator: sep })),
+        Command::Sample { n } => pipeline.add_stage(Box::new(SampleStage { n })),
         Command::Map { field, expression } => {
             let ast = crate::expr::parse(&expression).map_err(|e| {
                 if let Ok(diag) = e.downcast::<crate::error::DataPipeError>() {
