@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operator, e.g. `!(.status == "banned") && (.age >= 18 || .verified == true)`.
   Previously there was no way to express arbitrary grouping at all.
 
+### Changed
+- `sort`'s external-merge temp files are now kept alive for the full duration
+  of reading (via `ExternalSortIter`) instead of being dropped immediately
+  after opening each one. This removes a dependency on platform-specific
+  delete-while-open file semantics that the previous code relied on
+  implicitly without guaranteeing it.
+
 ### Fixed
 - **Correctness bug**: aggregations (`count`, `sum`, `avg`, `min`, `max`, `group`,
   `schema`) could silently produce wrong results on malformed input. `count`

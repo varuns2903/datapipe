@@ -259,6 +259,11 @@ pub struct ExternalSortIter<'a> {
     pub field: String,
     pub desc: bool,
     pub initialized: bool,
+    // Kept alive for the full duration of reading (rather than dropped right
+    // after opening each file) so temp-file cleanup happens deterministically
+    // once every reader is done with it, instead of relying on platform-
+    // specific delete-while-open semantics.
+    pub(crate) _temp_files: Vec<tempfile::TempPath>,
 }
 
 impl<'a> Iterator for ExternalSortIter<'a> {
@@ -339,7 +344,7 @@ impl Stage for SortStage {
         }
 
         let mut readers: Vec<RecordStream<'a>> = Vec::new();
-        for path in temp_files {
+        for path in &temp_files {
             let file = std::fs::File::open(path).unwrap();
             let reader = std::io::BufReader::new(file);
             let stream = crate::io::read_json_stream(reader);
@@ -352,6 +357,7 @@ impl Stage for SortStage {
             field,
             desc,
             initialized: false,
+            _temp_files: temp_files,
         })
     }
 }
