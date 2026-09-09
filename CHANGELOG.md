@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `dp completions <shell>` command generating completion scripts for bash,
+  zsh, fish, PowerShell, and elvish.
 - `--strict` global flag to abort the pipeline on the first malformed record.
 - Nested field access in `filter`/`map` expressions via dotted paths, e.g.
   `.user.age` or `.a.b.c`. Previously only flat top-level fields were

@@ -7,7 +7,7 @@ pub mod par_iter;
 pub mod pipeline;
 pub mod stages;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use cli::{Cli, Command};
 use pipeline::Pipeline;
 use stages::*;
@@ -15,6 +15,25 @@ use std::io::{stdin, stdout, BufReader, BufWriter};
 
 pub fn run_cli() -> miette::Result<()> {
     let cli = Cli::parse();
+
+    // Handled before any stdin/stdout pipeline setup, since it doesn't
+    // consume records at all. Matched by reference so `cli.command` is still
+    // usable below for the rest of the pipeline dispatch.
+    if let Command::Completions { shell } = &cli.command {
+        let mut cmd = Cli::command();
+        let name = cmd.get_name().to_string();
+        // Generate into an in-memory buffer rather than writing straight to
+        // stdout: clap_complete panics internally on a write error, which
+        // would otherwise crash on something as ordinary as piping into
+        // `head`. Writing the buffered result ourselves lets us just ignore
+        // a closed pipe, matching how well-behaved Unix CLIs handle it.
+        let mut buf = Vec::new();
+        clap_complete::generate(*shell, &mut cmd, name, &mut buf);
+        use std::io::Write;
+        let _ = stdout().write_all(&buf);
+        return Ok(());
+    }
+
     let stdin_handle = stdin();
     let reader = BufReader::new(stdin_handle.lock());
     let stdout_handle = stdout();
@@ -107,6 +126,7 @@ pub fn run_cli() -> miette::Result<()> {
             }));
         }
         Command::Inspect | Command::Csv => {}
+        Command::Completions { .. } => unreachable!("handled above before pipeline setup"),
     }
 
     let result_stream = pipeline.process(records);

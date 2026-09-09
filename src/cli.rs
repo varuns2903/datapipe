@@ -1,7 +1,8 @@
 use clap::{Parser, Subcommand};
+use clap_complete::Shell;
 
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
+#[command(name = "dp", author, version, about, long_about = None)]
 pub struct Cli {
     /// Read the input as CSV instead of JSONL
     #[arg(long, global = true)]
@@ -76,4 +77,10 @@ pub enum Command {
     Explode { field: String },
     /// Compute a new field or overwrite an existing one using an expression
     Map { field: String, expression: String },
+    /// Generate a shell completion script and print it to stdout
+    Completions {
+        /// The shell to generate completions for
+        #[arg(value_enum)]
+        shell: Shell,
+    },
 }

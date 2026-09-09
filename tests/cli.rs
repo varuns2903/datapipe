@@ -50,3 +50,28 @@ fn test_strict_mode_aborts_on_malformed_line() {
         .assert()
         .failure();
 }
+
+#[test]
+fn test_completions_registers_actual_binary_name() {
+    for shell in ["bash", "zsh", "fish", "powershell", "elvish"] {
+        let mut cmd = Command::cargo_bin("dp").unwrap();
+        cmd.arg("completions")
+            .arg(shell)
+            .assert()
+            .success()
+            // Must reference the real binary name "dp", not the crate/package
+            // name "datapipe-cli" - otherwise the generated script wouldn't
+            // actually provide completions for what a user types.
+            .stdout(predicate::str::contains("dp"))
+            .stdout(predicate::str::contains("datapipe-cli").not());
+    }
+}
+
+#[test]
+fn test_completions_does_not_read_stdin() {
+    // Completions shouldn't require piping any record input - regression
+    // test for the pipeline setup previously running unconditionally before
+    // checking which subcommand was requested.
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("completions").arg("bash").assert().success();
+}

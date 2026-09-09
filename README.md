@@ -43,6 +43,24 @@ cargo install datapipe-cli
 cargo install --path .
 ```
 
+### Shell completions
+
+`dp` can generate completion scripts for bash, zsh, fish, PowerShell, and elvish via `dp completions <shell>`:
+
+```bash
+# bash (persist across sessions by adding this to your ~/.bashrc)
+source <(dp completions bash)
+
+# zsh (persist by saving to a directory in your $fpath)
+dp completions zsh > "${fpath[1]}/_dp"
+
+# fish
+dp completions fish | source
+
+# PowerShell (add to your $PROFILE to persist)
+dp completions powershell | Out-String | Invoke-Expression
+```
+
 ## Quick Start
 
 Process a stream of JSON records, filter them, sort them, and output as CSV:
@@ -82,6 +100,9 @@ Run `dp <command> --help` for full details on any command below.
 - `--in-csv`: A global flag to read the input as CSV instead of JSONL. CSV values are inferred as integer, float, boolean, or string. Integers are only inferred when they round-trip exactly (e.g. `"25"` → `25`), so values like zip codes or phone numbers with a leading zero (`"00501"`) are correctly kept as strings rather than silently losing that leading zero.
 - `--strict`: A global flag that aborts the whole pipeline on the first malformed record instead of the default behavior (skip it with a warning and continue). See [Error behavior](#error-behavior).
 
+### Utility
+- `completions <shell>`: Prints a shell completion script for `bash`, `zsh`, `fish`, `powershell`, or `elvish`. See [Shell completions](#shell-completions).
+
 ## Expressions
 
 `filter` and `map` share the same expression language.
@@ -119,6 +140,7 @@ dp filter '!(.status == "banned") && (.age >= 18 || .verified == true)'
 - **Integer precision beyond `i64`:** JSON integers larger than `i64::MAX` (~9.2 × 10¹⁸, about 19 digits) lose precision — they're silently represented as a 64-bit float instead of the exact integer. This can affect very large numeric IDs (some 64-bit unsigned or 128-bit identifiers). Regular integers, and floats in general, are unaffected.
 - **Hash-key collisions in `group`/`join`/`unique`:** these stages key non-string values by serializing them to a JSON string internally. Two different-typed values that happen to serialize identically could theoretically collide — an edge case that hasn't come up in practice but is worth knowing about if you're grouping/joining/deduplicating on a field with mixed or unusual types.
 - **No input size guard:** there's currently no limit on a single record's size before it's parsed. An extremely long single line (or field) will be read into memory in full before any pipeline stage runs. Worth keeping in mind if you're processing data from an untrusted source.
+- **Broken-pipe output prints an error:** piping `dp`'s output into a command that closes the pipe early (e.g. `dp inspect largefile.jsonl | head`) prints `Error: Broken pipe (os error 32)` to stderr and exits non-zero, rather than exiting silently the way most well-behaved Unix tools do. It doesn't panic or corrupt output, just surfaces a benign, expected condition as an error message.
 
 ## Contributing
 

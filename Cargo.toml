@@ -10,6 +10,7 @@ description = "A high-performance, streaming-first CLI for structured data"
 
 [dependencies]
 clap = { version = "4.4", features = ["derive"] }
+clap_complete = "4.4"
 anyhow = "1.0"
 thiserror = "1.0"
 indexmap = { version = "2.14.1", features = ["serde"] }
