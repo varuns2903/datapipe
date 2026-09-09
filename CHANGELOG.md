@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `in` membership operator in `filter`/`map` expressions, e.g.
+  `.status in ("active", "pending")`. Works with any value type, not just
+  strings. Factored out a shared parenthesized-list parser reused by both
+  `in (...)` and function-call arguments.
 - `join --type <left|inner|right|full>` flag. Previously `join` only
   supported a left join; `inner`, `right`, and `full` are now available too.
 - String functions in `filter`/`map` expressions: `contains`, `starts_with`,

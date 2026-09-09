@@ -32,6 +32,10 @@ pub enum Expr {
         name: String,
         args: Vec<Expr>,
     },
+    In {
+        needle: Box<Expr>,
+        haystack: Vec<Expr>,
+    },
 }
 
 impl Expr {
@@ -53,6 +57,10 @@ impl Expr {
             }
             Expr::Literal(val) => val.clone(),
             Expr::Not(inner) => Value::Boolean(inner.evaluate(record) != Value::Boolean(true)),
+            Expr::In { needle, haystack } => {
+                let val = needle.evaluate(record);
+                Value::Boolean(haystack.iter().any(|e| e.evaluate(record) == val))
+            }
             Expr::Call { name, args } => {
                 let values: Vec<Value> = args.iter().map(|a| a.evaluate(record)).collect();
                 match (name.as_str(), values.as_slice()) {
@@ -186,6 +194,7 @@ pub enum Token {
     LParen,
     RParen,
     Comma,
+    In,
 }
 
 pub fn lex(input: &str) -> Result<Vec<Token>> {
@@ -371,6 +380,8 @@ pub fn lex(input: &str) -> Result<Vec<Token>> {
                     tokens.push(Token::BoolLit(true));
                 } else if s == "false" {
                     tokens.push(Token::BoolLit(false));
+                } else if s == "in" {
+                    tokens.push(Token::In);
                 } else {
                     // Not a keyword literal - treat as a function name, e.g.
                     // `contains` in `contains(.name, "x")`. Whether it's a
@@ -443,6 +454,14 @@ impl Parser {
     }
     fn parse_cmp(&mut self) -> Result<Expr> {
         let left = self.parse_term()?;
+        if let Some(Token::In) = self.peek() {
+            self.consume();
+            let haystack = self.parse_paren_expr_list("after 'in'")?;
+            return Ok(Expr::In {
+                needle: Box::new(left),
+                haystack,
+            });
+        }
         if let Some(tok) = self.peek() {
             let op = match tok {
                 Token::EqEq => Operator::Eq,
@@ -503,6 +522,32 @@ impl Parser {
         }
         self.parse_primary()
     }
+    /// Parses a `(expr, expr, ...)` list, consuming the leading `(` and
+    /// trailing `)`. Shared by function-call arguments and the `in (...)`
+    /// operator's right-hand side.
+    fn parse_paren_expr_list(&mut self, context: &str) -> Result<Vec<Expr>> {
+        match self.peek() {
+            Some(Token::LParen) => self.consume(),
+            _ => return Err(anyhow!("Expected '(' {}", context)),
+        }
+        let mut items = Vec::new();
+        if !matches!(self.peek(), Some(Token::RParen)) {
+            loop {
+                items.push(self.parse_expr()?);
+                match self.peek() {
+                    Some(Token::Comma) => {
+                        self.consume();
+                    }
+                    _ => break,
+                }
+            }
+        }
+        match self.peek() {
+            Some(Token::RParen) => self.consume(),
+            _ => return Err(anyhow!("Expected closing ')' {}", context)),
+        }
+        Ok(items)
+    }
     fn parse_primary(&mut self) -> Result<Expr> {
         match self.peek() {
             Some(Token::LParen) => {
@@ -519,27 +564,8 @@ impl Parser {
             Some(Token::Ident(name)) => {
                 let name = name.clone();
                 self.consume();
-                match self.peek() {
-                    Some(Token::LParen) => self.consume(),
-                    _ => return Err(anyhow!("Expected '(' after function name '{}'", name)),
-                }
-
-                let mut args = Vec::new();
-                if !matches!(self.peek(), Some(Token::RParen)) {
-                    loop {
-                        args.push(self.parse_expr()?);
-                        match self.peek() {
-                            Some(Token::Comma) => {
-                                self.consume();
-                            }
-                            _ => break,
-                        }
-                    }
-                }
-                match self.peek() {
-                    Some(Token::RParen) => self.consume(),
-                    _ => return Err(anyhow!("Expected closing ')' in call to '{}'", name)),
-                }
+                let args =
+                    self.parse_paren_expr_list(&format!("after function name '{}'", name))?;
 
                 let expected_arity = match name.as_str() {
                     "contains" | "starts_with" | "ends_with" => 2,
@@ -1138,5 +1164,91 @@ mod tests {
     #[test]
     fn parse_function_call_with_no_args_is_arity_error() {
         assert!(parse("lower()").is_err());
+    }
+
+    // --- in operator ---
+
+    #[test]
+    fn lex_in_keyword() {
+        let tokens = lex(r#".a in ("x")"#).unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Field("a".to_string()),
+                Token::In,
+                Token::LParen,
+                Token::StringLit("x".to_string()),
+                Token::RParen,
+            ]
+        );
+    }
+
+    #[test]
+    fn eval_in_matches_any_element() {
+        let rec = record_with(&[("status", Value::String("active".to_string()))]);
+        assert_eq!(
+            parse(r#".status in ("active", "pending")"#)
+                .unwrap()
+                .evaluate(&rec),
+            Value::Boolean(true)
+        );
+
+        let rec2 = record_with(&[("status", Value::String("deleted".to_string()))]);
+        assert_eq!(
+            parse(r#".status in ("active", "pending")"#)
+                .unwrap()
+                .evaluate(&rec2),
+            Value::Boolean(false)
+        );
+    }
+
+    #[test]
+    fn eval_in_with_integers() {
+        let rec = record_with(&[("n", Value::Integer(2))]);
+        assert_eq!(
+            parse(".n in (1, 2, 3)").unwrap().evaluate(&rec),
+            Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn eval_in_empty_list_is_always_false() {
+        let rec = record_with(&[("n", Value::Integer(1))]);
+        assert_eq!(
+            parse(".n in ()").unwrap().evaluate(&rec),
+            Value::Boolean(false)
+        );
+    }
+
+    #[test]
+    fn eval_in_combined_with_not_and_and() {
+        let rec = record_with(&[
+            ("status", Value::String("active".to_string())),
+            ("age", Value::Integer(30)),
+        ]);
+        assert_eq!(
+            parse(r#"!(.status in ("banned")) && .age >= 18"#)
+                .unwrap()
+                .evaluate(&rec),
+            Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn eval_in_on_nested_field() {
+        let mut user = IndexMap::new();
+        user.insert("role".to_string(), Value::String("admin".to_string()));
+        let rec = record_with(&[("user", Value::Object(user))]);
+        assert_eq!(
+            parse(r#".user.role in ("admin", "editor")"#)
+                .unwrap()
+                .evaluate(&rec),
+            Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn parse_rejects_in_without_parens() {
+        assert!(parse(r#".a in "x""#).is_err());
     }
 }
