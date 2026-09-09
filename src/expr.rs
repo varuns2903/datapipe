@@ -27,6 +27,7 @@ pub enum Expr {
         left: Box<Expr>,
         right: Box<Expr>,
     },
+    Not(Box<Expr>),
 }
 
 impl Expr {
@@ -47,6 +48,7 @@ impl Expr {
                 current.unwrap_or(Value::Null)
             }
             Expr::Literal(val) => val.clone(),
+            Expr::Not(inner) => Value::Boolean(inner.evaluate(record) != Value::Boolean(true)),
             Expr::BinaryOp { op, left, right } => {
                 let l = left.evaluate(record);
                 if *op == Operator::And && l != Value::Boolean(true) {
@@ -155,6 +157,9 @@ pub enum Token {
     Minus,
     Star,
     Slash,
+    Bang,
+    LParen,
+    RParen,
 }
 
 pub fn lex(input: &str) -> Result<Vec<Token>> {
@@ -180,6 +185,14 @@ pub fn lex(input: &str) -> Result<Vec<Token>> {
             '/' => {
                 chars.next();
                 tokens.push(Token::Slash);
+            }
+            '(' => {
+                chars.next();
+                tokens.push(Token::LParen);
+            }
+            ')' => {
+                chars.next();
+                tokens.push(Token::RParen);
             }
             '.' => {
                 chars.next();
@@ -239,10 +252,11 @@ pub fn lex(input: &str) -> Result<Vec<Token>> {
             }
             '!' => {
                 chars.next();
-                if chars.next() == Some('=') {
+                if chars.peek() == Some(&'=') {
+                    chars.next();
                     tokens.push(Token::NotEq);
                 } else {
-                    return Err(anyhow!("Expected '!='"));
+                    tokens.push(Token::Bang);
                 }
             }
             '>' => {
@@ -432,7 +446,7 @@ impl Parser {
         Ok(left)
     }
     fn parse_factor(&mut self) -> Result<Expr> {
-        let mut left = self.parse_primary()?;
+        let mut left = self.parse_unary()?;
         while let Some(tok) = self.peek() {
             let op = match tok {
                 Token::Star => Operator::Mul,
@@ -443,13 +457,31 @@ impl Parser {
             left = Expr::BinaryOp {
                 op,
                 left: Box::new(left),
-                right: Box::new(self.parse_primary()?),
+                right: Box::new(self.parse_unary()?),
             };
         }
         Ok(left)
     }
+    fn parse_unary(&mut self) -> Result<Expr> {
+        if let Some(Token::Bang) = self.peek() {
+            self.consume();
+            return Ok(Expr::Not(Box::new(self.parse_unary()?)));
+        }
+        self.parse_primary()
+    }
     fn parse_primary(&mut self) -> Result<Expr> {
         match self.peek() {
+            Some(Token::LParen) => {
+                self.consume();
+                let inner = self.parse_expr()?;
+                match self.peek() {
+                    Some(Token::RParen) => {
+                        self.consume();
+                        Ok(inner)
+                    }
+                    _ => Err(anyhow!("Expected closing ')'")),
+                }
+            }
             Some(Token::Field(f)) => {
                 let f = f.clone();
                 self.consume();
@@ -773,5 +805,120 @@ mod tests {
             ("active", Value::Boolean(true)),
         ]);
         assert_eq!(expr.evaluate(&rec), Value::Boolean(true));
+    }
+
+    // --- parentheses and unary not ---
+
+    #[test]
+    fn lex_parens_and_bang() {
+        let tokens = lex("!(true)").unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Bang,
+                Token::LParen,
+                Token::BoolLit(true),
+                Token::RParen
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_bang_vs_not_eq() {
+        assert_eq!(lex("!").unwrap(), vec![Token::Bang]);
+        assert_eq!(lex("!=").unwrap(), vec![Token::NotEq]);
+        assert_eq!(
+            lex("!true").unwrap(),
+            vec![Token::Bang, Token::BoolLit(true)]
+        );
+    }
+
+    #[test]
+    fn parse_parens_override_precedence() {
+        let rec = record_with(&[]);
+        // Without parens: 2 + 3 * 4 == 14. With parens: (2 + 3) * 4 == 20.
+        assert_eq!(
+            parse("(2 + 3) * 4").unwrap().evaluate(&rec),
+            Value::Integer(20)
+        );
+    }
+
+    #[test]
+    fn parse_nested_parens() {
+        let rec = record_with(&[]);
+        assert_eq!(
+            parse("((1 + 2) * (3 + 4))").unwrap().evaluate(&rec),
+            Value::Integer(21)
+        );
+    }
+
+    #[test]
+    fn parse_rejects_unclosed_paren() {
+        assert!(parse("(1 + 2").is_err());
+    }
+
+    #[test]
+    fn parse_rejects_bare_bang_with_no_operand() {
+        assert!(parse("!").is_err());
+    }
+
+    #[test]
+    fn eval_not_negates_boolean() {
+        let rec = record_with(&[("admin", Value::Boolean(true))]);
+        assert_eq!(
+            parse("!.admin").unwrap().evaluate(&rec),
+            Value::Boolean(false)
+        );
+
+        let rec2 = record_with(&[("admin", Value::Boolean(false))]);
+        assert_eq!(
+            parse("!.admin").unwrap().evaluate(&rec2),
+            Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn eval_not_treats_non_true_values_as_falsy() {
+        // Consistent with && / || short-circuit semantics elsewhere in this
+        // module: only Boolean(true) is "truthy", so !anything-else is true.
+        let rec = record_with(&[("n", Value::Integer(5))]);
+        assert_eq!(parse("!.n").unwrap().evaluate(&rec), Value::Boolean(true));
+
+        let rec2 = record_with(&[]);
+        assert_eq!(
+            parse("!.missing").unwrap().evaluate(&rec2),
+            Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn eval_not_with_grouped_expression() {
+        let rec_true_true =
+            record_with(&[("a", Value::Boolean(true)), ("b", Value::Boolean(true))]);
+        let rec_true_false =
+            record_with(&[("a", Value::Boolean(true)), ("b", Value::Boolean(false))]);
+
+        let expr = parse("!(.a && .b)").unwrap();
+        assert_eq!(expr.evaluate(&rec_true_true), Value::Boolean(false));
+        assert_eq!(expr.evaluate(&rec_true_false), Value::Boolean(true));
+    }
+
+    #[test]
+    fn eval_double_not_cancels_out() {
+        let rec = record_with(&[("a", Value::Boolean(true))]);
+        assert_eq!(parse("!!.a").unwrap().evaluate(&rec), Value::Boolean(true));
+    }
+
+    #[test]
+    fn eval_grouped_or_changes_and_or_precedence() {
+        // Without parens, "&&" binds tighter than "||":
+        // true || false && false == true || (false && false) == true.
+        // With parens forcing the other grouping:
+        // (true || false) && false == true && false == false.
+        let rec = record_with(&[]);
+        assert_eq!(
+            parse("(true || false) && false").unwrap().evaluate(&rec),
+            Value::Boolean(false)
+        );
     }
 }

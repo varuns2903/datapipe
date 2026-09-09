@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Nested field access in `filter`/`map` expressions via dotted paths, e.g.
   `.user.age` or `.a.b.c`. Previously only flat top-level fields were
   supported, which was a significant gap given how common nested JSON is.
+- Parentheses `( )` to override expression precedence, and a unary `!` (not)
+  operator, e.g. `!(.status == "banned") && (.age >= 18 || .verified == true)`.
+  Previously there was no way to express arbitrary grouping at all.
 
 ### Fixed
 - **Correctness bug**: aggregations (`count`, `sum`, `avg`, `min`, `max`, `group`,
