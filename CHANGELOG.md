@@ -7,12 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Documentation
-- Documented that `join` loads its entire right-hand file into memory as a
-  hash table (same class of tradeoff as `unique`/`group`'s memory usage,
-  already documented) - fine for typical lookup-table sizes, not bounded
-  for huge join files. Considered a streaming sort-merge join instead but
-  scoped it out as a larger algorithmic change without clear demand yet.
+## [0.2.0] - 2026-09-10
 
 ### Added
 - `dp run <pipeline.toml>` for declarative multi-stage pipelines defined in
@@ -59,12 +54,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without any warning, via the same `.flatten()`-discards-errors pattern
   fixed elsewhere in this release. It now respects `--strict`/the default
   skip-with-warning behavior, consistent with the main stream.
+- **Correctness bug**: aggregations (`count`, `sum`, `avg`, `min`, `max`, `group`,
+  `schema`) could silently produce wrong results on malformed input. `count`
+  specifically counted `Err` items as if they were valid records, and
+  `serde_json`'s streaming deserializer stopped yielding entirely after the
+  first parse error, silently dropping every valid record after a bad line.
+  `read_json_stream` now parses true line-delimited JSON (one
+  `serde_json::from_str` call per line) instead of a single continuous
+  `Deserializer` stream, so a malformed line no longer prevents subsequent
+  valid lines from being read. By default, a malformed record is now
+  skipped with a warning on stderr and processing continues, instead of
+  the whole pipeline dying on the first bad line.
 
 ### Documentation
 - Added a "Known limitations" section to the README covering: integer
   precision loss beyond `i64::MAX`, potential hash-key collisions in
   `group`/`join`/`unique` (they key non-string values by JSON-serializing
-  them), and the lack of an input size guard for a single record/line.
+  them), the lack of an input size guard for a single record/line, and
+  that `join` loads its entire right-hand file into memory as a hash
+  table (same class of tradeoff as `unique`/`group`'s memory usage).
+  Considered a streaming sort-merge join instead but scoped it out as a
+  larger algorithmic change without clear demand yet.
 
 ### Changed
 - README no longer claims blanket "O(1) memory bounds" for the whole tool.
@@ -82,19 +92,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after opening each one. This removes a dependency on platform-specific
   delete-while-open file semantics that the previous code relied on
   implicitly without guaranteeing it.
-
-### Fixed
-- **Correctness bug**: aggregations (`count`, `sum`, `avg`, `min`, `max`, `group`,
-  `schema`) could silently produce wrong results on malformed input. `count`
-  specifically counted `Err` items as if they were valid records, and
-  `serde_json`'s streaming deserializer stopped yielding entirely after the
-  first parse error, silently dropping every valid record after a bad line.
-- `read_json_stream` now parses true line-delimited JSON (one `serde_json::from_str`
-  call per line) instead of a single continuous `Deserializer` stream, so a
-  malformed line no longer prevents subsequent valid lines from being read.
-- By default, a malformed record is now skipped with a warning on stderr and
-  processing continues, instead of the whole pipeline dying on the first bad
-  line with no way to process the rest of a large file.
 
 ## [0.1.1] - 2026-09-09
 
