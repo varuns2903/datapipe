@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `concat(a, b, ...)` function in `filter`/`map` expressions, e.g.
+  `concat(.first, " ", .last)`. Previously there was no way to build a
+  string from multiple values at all - `+` only handles numeric types
+  and silently evaluates to `null` on strings. Unlike the other string
+  functions, `concat` stringifies any scalar (not just strings) and
+  treats `null` as an empty string rather than nulling out the whole
+  result, since its purpose is building display text where a missing
+  optional field shouldn't break the rest of the string.
 - An mdBook documentation site under `docs/`, deployed to GitHub Pages via
   `.github/workflows/docs.yml` on pushes touching `docs/**`. Restructures
   the README's content into browsable chapters (installation, commands,

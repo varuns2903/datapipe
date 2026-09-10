@@ -87,6 +87,26 @@ impl Expr {
             },
             Expr::Call { name, args } => {
                 let values: Vec<Value> = args.iter().map(|a| a.evaluate(record)).collect();
+                if name == "concat" {
+                    // Unlike the other functions below, concat stringifies
+                    // any scalar (not just strings) and treats null as an
+                    // empty string rather than making the whole result
+                    // null - the point of this function is building display
+                    // text, where a missing optional field shouldn't blow
+                    // up the rest of the string.
+                    let mut out = String::new();
+                    for v in &values {
+                        match v {
+                            Value::String(s) => out.push_str(s),
+                            Value::Integer(i) => out.push_str(&i.to_string()),
+                            Value::Float(f) => out.push_str(&f.to_string()),
+                            Value::Boolean(b) => out.push_str(&b.to_string()),
+                            Value::Null => {}
+                            Value::Array(_) | Value::Object(_) => out.push_str("[complex]"),
+                        }
+                    }
+                    return Value::String(out);
+                }
                 match (name.as_str(), values.as_slice()) {
                     ("contains", [Value::String(haystack), Value::String(needle)]) => {
                         Value::Boolean(haystack.contains(needle.as_str()))
@@ -614,6 +634,16 @@ impl Parser {
                         text: Box::new(text_expr),
                         pattern: CompiledRegex(std::sync::Arc::new(regex)),
                     });
+                }
+
+                if name == "concat" {
+                    if args.len() < 2 {
+                        return Err(anyhow!(
+                            "'concat' expects at least 2 arguments, got {}",
+                            args.len()
+                        ));
+                    }
+                    return Ok(Expr::Call { name, args });
                 }
 
                 let expected_arity = match name.as_str() {
@@ -1378,5 +1408,90 @@ mod tests {
         let c = CompiledRegex(std::sync::Arc::new(regex::Regex::new("xyz").unwrap()));
         assert_eq!(a, b);
         assert_ne!(a, c);
+    }
+
+    // --- concat() ---
+
+    #[test]
+    fn eval_concat_strings() {
+        let rec = record_with(&[
+            ("first", Value::String("Alice".to_string())),
+            ("last", Value::String("Smith".to_string())),
+        ]);
+        assert_eq!(
+            parse(r#"concat(.first, " ", .last)"#)
+                .unwrap()
+                .evaluate(&rec),
+            Value::String("Alice Smith".to_string())
+        );
+    }
+
+    #[test]
+    fn eval_concat_stringifies_numbers_and_booleans() {
+        let rec = record_with(&[
+            ("age", Value::Integer(30)),
+            ("score", Value::Float(4.5)),
+            ("active", Value::Boolean(true)),
+        ]);
+        assert_eq!(
+            parse(r#"concat(.age, "-", .score, "-", .active)"#)
+                .unwrap()
+                .evaluate(&rec),
+            Value::String("30-4.5-true".to_string())
+        );
+    }
+
+    #[test]
+    fn eval_concat_treats_null_as_empty_string() {
+        // Deliberately different from contains/lower/etc: concat is for
+        // building display text, so a missing optional field shouldn't
+        // null out the whole result.
+        let rec = record_with(&[("first", Value::String("Alice".to_string()))]);
+        assert_eq!(
+            parse(r#"concat(.first, .missing)"#).unwrap().evaluate(&rec),
+            Value::String("Alice".to_string())
+        );
+    }
+
+    #[test]
+    fn eval_concat_renders_complex_values_as_placeholder() {
+        let mut obj = IndexMap::new();
+        obj.insert("x".to_string(), Value::Integer(1));
+        let rec = record_with(&[("data", Value::Object(obj))]);
+        assert_eq!(
+            parse(r#"concat("val=", .data)"#).unwrap().evaluate(&rec),
+            Value::String("val=[complex]".to_string())
+        );
+    }
+
+    #[test]
+    fn eval_concat_many_arguments() {
+        let rec = record_with(&[]);
+        assert_eq!(
+            parse(r#"concat("a", "b", "c", "d", "e")"#)
+                .unwrap()
+                .evaluate(&rec),
+            Value::String("abcde".to_string())
+        );
+    }
+
+    #[test]
+    fn eval_concat_result_usable_in_comparison() {
+        let rec = record_with(&[
+            ("a", Value::String("foo".to_string())),
+            ("b", Value::String("bar".to_string())),
+        ]);
+        assert_eq!(
+            parse(r#"concat(.a, .b) == "foobar""#)
+                .unwrap()
+                .evaluate(&rec),
+            Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn parse_rejects_concat_with_fewer_than_two_args() {
+        assert!(parse(r#"concat(.a)"#).is_err());
+        assert!(parse(r#"concat()"#).is_err());
     }
 }
