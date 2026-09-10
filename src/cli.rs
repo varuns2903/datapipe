@@ -29,6 +29,14 @@ pub enum Command {
         /// A boolean expression, e.g. `.age > 25 && .admin == true`
         expression: String,
     },
+    /// Keep records where any field's value contains the given text,
+    /// without needing to know the field names up front
+    Search {
+        text: String,
+        /// Treat `text` as a regex instead of a literal substring
+        #[arg(long)]
+        regex: bool,
+    },
     /// Keep only the specified comma-separated fields
     Select {
         #[arg(value_delimiter = ',')]

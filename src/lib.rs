@@ -32,6 +32,21 @@ fn command_into_stage(command: Command, strict: bool) -> miette::Result<Option<B
             })?;
             Box::new(FilterStage { ast })
         }
+        Command::Search { text, regex } => {
+            if regex {
+                let re = regex::Regex::new(&text)
+                    .map_err(|e| miette::miette!("Invalid regex pattern '{}': {}", text, e))?;
+                Box::new(SearchStage {
+                    literal: None,
+                    regex: Some(re),
+                })
+            } else {
+                Box::new(SearchStage {
+                    literal: Some(text),
+                    regex: None,
+                })
+            }
+        }
         Command::Select { fields, exclude } => Box::new(SelectStage { fields, exclude }),
         Command::Limit { max } => Box::new(LimitStage { max }),
         Command::Sort { field, desc } => Box::new(SortStage { field, desc }),

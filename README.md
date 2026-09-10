@@ -85,6 +85,7 @@ Run `dp <command> --help` for full details on any command below.
 
 ### Transformations
 - `filter <expression>`: Keeps only records where the expression evaluates to `true`.
+- `search <text> [--regex]`: Keeps records where *any* field's value contains the given text, without needing to know the field names up front. With `--regex`, `<text>` is a regex compiled once (not per-record) instead of a literal substring. Useful for wide or unknown-schema data — the alternative is hand-writing `contains(.a,"x") || contains(.b,"x") || ...` for every field.
 - `select <fields> [--exclude]`: Keeps only the specified comma-separated fields. Missing fields are filled with `null`. With `--exclude`, `<fields>` is instead an exclusion list — keeps everything except the named fields (field order preserved), e.g. `dp select password,secret --exclude`.
 - `limit <max>`: Halts the stream after yielding `N` records.
 - `explode <field>`: Expands an array-valued field into one record per element. Records where the field isn't an array pass through unchanged.
@@ -161,7 +162,7 @@ fields = ["name", "age"]
 cat users.jsonl | dp run pipeline.toml
 ```
 
-Each `[[stages]]` table's `type` corresponds to a subcommand (`filter`, `select`, `sort`, `unique`, `dedup`, `count`, `sum`, `avg`, `min`, `max`, `schema`, `stats`, `group`, `freq`, `explode`, `rename`, `flatten`, `sample`, `map`, `join`) with the same field names as that subcommand's flags/arguments — e.g. `join` takes `file`, `on`, and an optional `join_type` (`"left"` | `"inner"` | `"right"` | `"full"`, defaults to `"left"`). Format/utility commands (`csv`, `table`, `completions`, `man`, `run` itself) aren't valid `[[stages]]` entries — use the top-level `out_csv`/`out_table` settings for those output formats instead.
+Each `[[stages]]` table's `type` corresponds to a subcommand (`filter`, `search`, `select`, `sort`, `unique`, `dedup`, `count`, `sum`, `avg`, `min`, `max`, `schema`, `stats`, `group`, `freq`, `explode`, `rename`, `flatten`, `sample`, `map`, `join`) with the same field names as that subcommand's flags/arguments — e.g. `join` takes `file`, `on`, and an optional `join_type` (`"left"` | `"inner"` | `"right"` | `"full"`, defaults to `"left"`). Format/utility commands (`csv`, `table`, `completions`, `man`, `run` itself) aren't valid `[[stages]]` entries — use the top-level `out_csv`/`out_table` settings for those output formats instead.
 
 ## Expressions
 

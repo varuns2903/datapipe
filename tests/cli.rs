@@ -362,3 +362,38 @@ fn test_dedup_drops_exact_duplicates_only() {
         .success()
         .stdout("{\"a\":1,\"b\":2}\n{\"a\":1,\"b\":3}\n");
 }
+
+#[test]
+fn test_search_matches_any_field() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("search")
+        .arg("foo")
+        .write_stdin("{\"a\":\"foo\",\"b\":\"bar\"}\n{\"a\":\"baz\",\"b\":\"foo\"}\n{\"a\":\"x\",\"b\":\"y\"}\n")
+        .assert()
+        .success()
+        .stdout("{\"a\":\"foo\",\"b\":\"bar\"}\n{\"a\":\"baz\",\"b\":\"foo\"}\n");
+}
+
+#[test]
+fn test_search_regex_mode() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("search")
+        .arg("--regex")
+        .arg(r"^.+@example\.com$")
+        .write_stdin("{\"email\":\"alice@example.com\"}\n{\"email\":\"bob@other.org\"}\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("alice"))
+        .stdout(predicate::str::contains("bob").not());
+}
+
+#[test]
+fn test_search_invalid_regex_fails() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("search")
+        .arg("--regex")
+        .arg("[unclosed")
+        .write_stdin("{}\n")
+        .assert()
+        .failure();
+}

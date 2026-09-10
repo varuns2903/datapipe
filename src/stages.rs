@@ -478,6 +478,46 @@ impl Stage for DedupStage {
     }
 }
 
+/// Keeps records where at least one field's value (rendered the same way
+/// `csv`/`table` output does) contains the search text or matches the
+/// regex. Exactly one of `literal`/`regex` is set; the regex, if any, is
+/// compiled once by the caller (not per-record), same principle as the
+/// `matches()` expression function.
+pub struct SearchStage {
+    pub literal: Option<String>,
+    pub regex: Option<regex::Regex>,
+}
+
+impl Stage for SearchStage {
+    fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
+        let literal = self.literal.clone();
+        let regex = self.regex.clone();
+
+        let filtered = input.filter_map(move |res| match res {
+            Ok(record) => {
+                let matched = record.values().any(|v| {
+                    let s = crate::io::value_to_display_string(v);
+                    if let Some(re) = &regex {
+                        re.is_match(&s)
+                    } else if let Some(lit) = &literal {
+                        s.contains(lit.as_str())
+                    } else {
+                        false
+                    }
+                });
+                if matched {
+                    Some(Ok(record))
+                } else {
+                    None
+                }
+            }
+            Err(e) => Some(Err(e)),
+        });
+
+        Box::new(filtered)
+    }
+}
+
 pub struct SchemaStage;
 
 impl Stage for SchemaStage {
@@ -1341,6 +1381,94 @@ mod tests {
         );
         let out: Vec<_> = DedupStage.process(input).collect();
         assert!(out.iter().any(|r| r.is_err()));
+    }
+
+    #[test]
+    fn search_literal_matches_any_field() {
+        let input = stream(vec![
+            rec(&[
+                ("name", Value::String("Alice".to_string())),
+                ("note", Value::String("likes Rust".to_string())),
+            ]),
+            rec(&[
+                ("name", Value::String("Bob".to_string())),
+                ("note", Value::String("likes Python".to_string())),
+            ]),
+        ]);
+        let stage = SearchStage {
+            literal: Some("Rust".to_string()),
+            regex: None,
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            out[0].get("name"),
+            Some(&Value::String("Alice".to_string()))
+        );
+    }
+
+    #[test]
+    fn search_matches_across_different_fields_per_record() {
+        let input = stream(vec![
+            rec(&[
+                ("a", Value::String("foo".to_string())),
+                ("b", Value::String("bar".to_string())),
+            ]),
+            rec(&[
+                ("a", Value::String("baz".to_string())),
+                ("b", Value::String("foo".to_string())),
+            ]),
+            rec(&[
+                ("a", Value::String("nope".to_string())),
+                ("b", Value::String("nope".to_string())),
+            ]),
+        ]);
+        let stage = SearchStage {
+            literal: Some("foo".to_string()),
+            regex: None,
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn search_matches_stringified_numeric_field() {
+        let input = stream(vec![
+            rec(&[("age", Value::Integer(30))]),
+            rec(&[("age", Value::Integer(40))]),
+        ]);
+        let stage = SearchStage {
+            literal: Some("30".to_string()),
+            regex: None,
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn search_regex_mode() {
+        let input = stream(vec![
+            rec(&[("email", Value::String("alice@example.com".to_string()))]),
+            rec(&[("email", Value::String("bob@other.org".to_string()))]),
+        ]);
+        let re = regex::Regex::new(r"^.+@example\.com$").unwrap();
+        let stage = SearchStage {
+            literal: None,
+            regex: Some(re),
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn search_no_matches_yields_nothing() {
+        let input = stream(vec![rec(&[("a", Value::String("x".to_string()))])]);
+        let stage = SearchStage {
+            literal: Some("zzz".to_string()),
+            regex: None,
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out.len(), 0);
     }
 
     #[test]

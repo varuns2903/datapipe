@@ -45,6 +45,11 @@ pub enum StageSpec {
     Filter {
         expression: String,
     },
+    Search {
+        text: String,
+        #[serde(default)]
+        regex: bool,
+    },
     Select {
         fields: Vec<String>,
         #[serde(default)]
@@ -132,6 +137,7 @@ pub fn parse(contents: &str) -> anyhow::Result<PipelineFile> {
 pub fn into_command(spec: StageSpec) -> Command {
     match spec {
         StageSpec::Filter { expression } => Command::Filter { expression },
+        StageSpec::Search { text, regex } => Command::Search { text, regex },
         StageSpec::Select { fields, exclude } => Command::Select { fields, exclude },
         StageSpec::Limit { max } => Command::Limit { max },
         StageSpec::Sort { field, desc } => Command::Sort { field, desc },
@@ -427,5 +433,37 @@ mod tests {
         let file = parse(toml).unwrap();
         assert!(matches!(file.stages[0], StageSpec::Dedup));
         assert!(matches!(into_command(StageSpec::Dedup), Command::Dedup));
+    }
+
+    #[test]
+    fn parses_search_stage_with_regex_flag() {
+        let toml = r#"
+            [[stages]]
+            type = "search"
+            text = "foo"
+            regex = true
+        "#;
+        let file = parse(toml).unwrap();
+        match &file.stages[0] {
+            StageSpec::Search { text, regex } => {
+                assert_eq!(text, "foo");
+                assert!(*regex);
+            }
+            _ => panic!("expected StageSpec::Search"),
+        }
+    }
+
+    #[test]
+    fn search_regex_defaults_to_false() {
+        let toml = r#"
+            [[stages]]
+            type = "search"
+            text = "foo"
+        "#;
+        let file = parse(toml).unwrap();
+        assert!(matches!(
+            file.stages[0],
+            StageSpec::Search { regex: false, .. }
+        ));
     }
 }

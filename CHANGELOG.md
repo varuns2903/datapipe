@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `search <text> [--regex]` command: keeps records where *any* field's
+  value contains the given text, without needing to know the field names
+  up front (`xsv search`'s equivalent). Previously the only way to search
+  across unknown/wide-schema fields was hand-writing
+  `contains(.a,"x") || contains(.b,"x") || ...` for every field. With
+  `--regex`, the pattern is compiled once (not per-record), same
+  principle as the `matches()` expression function. Made
+  `value_to_display_string` (used by the `csv`/`table` writers)
+  `pub(crate)` so search renders field values identically to those
+  writers rather than duplicating the logic a third time.
 - `dedup` command: drops exact duplicate records (comparing every field),
   keeping the first occurrence (`xsv dedup`'s equivalent). Complements
   `unique <field>`, which only dedupes on one field - `dedup` only drops

@@ -3,6 +3,7 @@
 These stages process the stream lazily, one record at a time, with O(1) memory.
 
 - `filter <expression>`: Keeps only records where the expression evaluates to `true`. See [Expressions](../expressions.md).
+- `search <text> [--regex]`: Keeps records where *any* field's value contains the given text, without needing to know the field names up front. With `--regex`, `<text>` is a regex compiled once (not per-record) instead of a literal substring. Useful for wide or unknown-schema data — the alternative is hand-writing `contains(.a,"x") || contains(.b,"x") || ...` for every field.
 - `select <fields> [--exclude]`: Keeps only the specified comma-separated fields. Missing fields are filled with `null`. With `--exclude`, `<fields>` is instead an exclusion list — keeps everything except the named fields (field order preserved), e.g. `dp select password,secret --exclude`.
 - `limit <max>`: Halts the stream after yielding `N` records.
 - `explode <field>`: Expands an array-valued field into one record per element. Records where the field isn't an array pass through unchanged.

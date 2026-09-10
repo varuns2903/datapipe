@@ -152,7 +152,7 @@ fn write_csv_row<W: Write>(
 
 /// Renders a `Value` as plain text for tabular display (CSV cells, table
 /// columns) - not JSON, just a human-readable flat representation.
-fn value_to_display_string(v: &Value) -> String {
+pub(crate) fn value_to_display_string(v: &Value) -> String {
     match v {
         Value::Null => "".to_string(),
         Value::Boolean(b) => b.to_string(),
