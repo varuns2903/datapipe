@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `--pretty` / `-p` global flag to indent JSON output for human reading.
+  Off by default (output stays compact JSONL). Also available as a
+  `pretty` setting in pipeline files, combining with the CLI flag the
+  same way `strict` does (either being true is enough).
 - `concat(a, b, ...)` function in `filter`/`map` expressions, e.g.
   `concat(.first, " ", .last)`. Previously there was no way to build a
   string from multiple values at all - `+` only handles numeric types

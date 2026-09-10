@@ -8,6 +8,7 @@ use serde::Deserialize;
 /// in_csv = false
 /// strict = false
 /// out_csv = false
+/// pretty = false
 ///
 /// [[stages]]
 /// type = "filter"
@@ -26,6 +27,8 @@ pub struct PipelineFile {
     pub strict: bool,
     #[serde(default)]
     pub out_csv: bool,
+    #[serde(default)]
+    pub pretty: bool,
     pub stages: Vec<StageSpec>,
 }
 
@@ -170,13 +173,24 @@ mod tests {
             in_csv = true
             strict = true
             out_csv = true
+            pretty = true
             stages = []
         "#;
         let file = parse(toml).unwrap();
         assert!(file.in_csv);
         assert!(file.strict);
         assert!(file.out_csv);
+        assert!(file.pretty);
         assert_eq!(file.stages.len(), 0);
+    }
+
+    #[test]
+    fn pretty_defaults_to_false() {
+        let toml = r#"
+            stages = []
+        "#;
+        let file = parse(toml).unwrap();
+        assert!(!file.pretty);
     }
 
     #[test]

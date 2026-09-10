@@ -32,10 +32,15 @@ pub fn read_json_stream<'a, R: BufRead + 'a>(
 pub fn write_json_stream<W: Write>(
     mut writer: W,
     records: impl Iterator<Item = Result<Record>>,
+    pretty: bool,
 ) -> Result<()> {
     for record in records {
         let rec = record?;
-        serde_json::to_writer(&mut writer, &rec)?;
+        if pretty {
+            serde_json::to_writer_pretty(&mut writer, &rec)?;
+        } else {
+            serde_json::to_writer(&mut writer, &rec)?;
+        }
         writer.write_all(b"\n")?;
     }
     Ok(())
@@ -242,5 +247,23 @@ mod tests {
         let records = read_csv_all("active,note\ntrue,\n");
         assert_eq!(records[0].get("active"), Some(&Value::Boolean(true)));
         assert_eq!(records[0].get("note"), Some(&Value::Null));
+    }
+
+    #[test]
+    fn write_json_stream_compact_by_default() {
+        let mut rec = Record::new();
+        rec.insert("a".to_string(), Value::Integer(1));
+        let mut out = Vec::new();
+        write_json_stream(&mut out, std::iter::once(Ok(rec)), false).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "{\"a\":1}\n");
+    }
+
+    #[test]
+    fn write_json_stream_pretty_indents() {
+        let mut rec = Record::new();
+        rec.insert("a".to_string(), Value::Integer(1));
+        let mut out = Vec::new();
+        write_json_stream(&mut out, std::iter::once(Ok(rec)), true).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "{\n  \"a\": 1\n}\n");
     }
 }

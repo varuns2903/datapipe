@@ -263,3 +263,35 @@ fn test_run_malformed_toml_fails() {
         .assert()
         .failure();
 }
+
+#[test]
+fn test_pretty_flag_indents_json_output() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("--pretty")
+        .arg("inspect")
+        .write_stdin("{\"a\":1}\n")
+        .assert()
+        .success()
+        .stdout("{\n  \"a\": 1\n}\n");
+}
+
+#[test]
+fn test_pretty_short_flag() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("-p")
+        .arg("inspect")
+        .write_stdin("{\"a\":1}\n")
+        .assert()
+        .success()
+        .stdout("{\n  \"a\": 1\n}\n");
+}
+
+#[test]
+fn test_default_output_stays_compact() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("inspect")
+        .write_stdin("{\"a\":1}\n")
+        .assert()
+        .success()
+        .stdout("{\"a\":1}\n");
+}

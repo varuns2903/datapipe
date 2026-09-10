@@ -120,6 +120,7 @@ Run `dp <command> --help` for full details on any command below.
 - `csv`: Outputs the resulting stream as a CSV instead of JSONL. Array/object fields are rendered as `[complex]`.
 - `--in-csv`: A global flag to read the input as CSV instead of JSONL. CSV values are inferred as integer, float, boolean, or string. Integers are only inferred when they round-trip exactly (e.g. `"25"` → `25`), so values like zip codes or phone numbers with a leading zero (`"00501"`) are correctly kept as strings rather than silently losing that leading zero.
 - `--strict`: A global flag that aborts the whole pipeline on the first malformed record instead of the default behavior (skip it with a warning and continue). See [Error behavior](#error-behavior).
+- `--pretty` / `-p`: A global flag that indents JSON output for human reading, instead of the default compact one-object-per-line format. Each pretty-printed object may span multiple lines, so this output is **not** valid JSONL — don't pipe it into another `dp` command. Ignored for `csv` output.
 
 ### Utility
 - `completions <shell>`: Prints a shell completion script for `bash`, `zsh`, `fish`, `powershell`, or `elvish`. See [Shell completions](#shell-completions).
@@ -135,6 +136,7 @@ For a pipeline with many stages, `dp run pipeline.toml` runs them all in a singl
 strict = false     # optional, defaults to false; combines with --strict (either being true is enough)
 out_csv = false    # optional, defaults to false - output JSONL or CSV
 in_csv = false     # optional, defaults to false - read input as JSONL or CSV
+pretty = false     # optional, defaults to false; combines with --pretty (either being true is enough)
 
 [[stages]]
 type = "filter"

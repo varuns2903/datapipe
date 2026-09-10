@@ -7,6 +7,7 @@ For a pipeline with many stages, `dp run pipeline.toml` runs them all in a singl
 strict = false     # optional, defaults to false; combines with --strict (either being true is enough)
 out_csv = false     # optional, defaults to false - output JSONL or CSV
 in_csv = false      # optional, defaults to false - read input as JSONL or CSV
+pretty = false      # optional, defaults to false; combines with --pretty (either being true is enough)
 
 [[stages]]
 type = "filter"

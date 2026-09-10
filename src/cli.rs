@@ -13,6 +13,11 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub strict: bool,
 
+    /// Pretty-print JSON output (indented, one object may span multiple
+    /// lines). Not valid JSONL - don't pipe this back into another `dp`.
+    #[arg(long, short = 'p', global = true)]
+    pub pretty: bool,
+
     #[command(subcommand)]
     pub command: Command,
 }

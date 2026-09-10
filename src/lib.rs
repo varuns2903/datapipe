@@ -152,13 +152,14 @@ fn read_input(
 fn write_output(
     writer: BufWriter<std::io::StdoutLock>,
     out_csv: bool,
+    pretty: bool,
     result_stream: crate::pipeline::RecordStream,
 ) -> miette::Result<()> {
     if out_csv {
         crate::io::write_csv_stream(writer, result_stream)
             .map_err(|e| miette::miette!(e.to_string()))
     } else {
-        crate::io::write_json_stream(writer, result_stream)
+        crate::io::write_json_stream(writer, result_stream, pretty)
             .map_err(|e| miette::miette!(e.to_string()))
     }
 }
@@ -222,7 +223,8 @@ pub fn run_cli() -> miette::Result<()> {
         }
 
         let result_stream = pipeline.process(records);
-        return write_output(writer, spec.out_csv, result_stream);
+        let pretty = spec.pretty || cli.pretty;
+        return write_output(writer, spec.out_csv, pretty, result_stream);
     }
 
     let stdin_handle = stdin();
@@ -242,5 +244,5 @@ pub fn run_cli() -> miette::Result<()> {
     }
 
     let result_stream = pipeline.process(records);
-    write_output(writer, is_csv_out, result_stream)
+    write_output(writer, is_csv_out, cli.pretty, result_stream)
 }
