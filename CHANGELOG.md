@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- GitHub issue templates (bug report, feature request) and a pull request
+  template, under `.github/`.
+- `CODE_OF_CONDUCT.md` (Contributor Covenant) and `SECURITY.md`
+  (vulnerability reporting policy via GitHub private advisories).
+
+### Documentation
+- `CONTRIBUTING.md`: fixed a stale reference to the old `match cli.command`
+  block (refactored into `command_into_stage` when pipeline files were
+  added) and added `src/pipeline_file.rs` to the project layout list.
+
 ## [0.2.0] - 2026-09-10
 
 ### Added

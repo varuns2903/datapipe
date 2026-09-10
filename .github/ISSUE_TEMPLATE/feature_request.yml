@@ -1,0 +1,30 @@
+name: Feature request
+description: Suggest a new command, flag, or expression feature
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe the task or workflow this would help with, ideally with a concrete example (a command you wish existed, a dataset shape, etc).
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would the command/flag/syntax look like? Not required to be exact - a rough sketch is fine.
+      placeholder: |
+        dp head <n>       # first n records
+        dp tail <n>       # last n records
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Workarounds you've tried
+      description: Is there a way to do this today with existing commands (even if clunky)?
+    validations:
+      required: false
