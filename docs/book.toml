@@ -1,0 +1,15 @@
+[book]
+title = "DataPipe"
+description = "A high-performance, streaming-first CLI for structured data"
+authors = ["Varun S"]
+src = "src"
+language = "en"
+
+[output.html]
+git-repository-url = "https://github.com/varuns2903/datapipe"
+edit-url-template = "https://github.com/varuns2903/datapipe/edit/main/docs/{path}"
+default-theme = "light"
+preferred-dark-theme = "navy"
+
+[output.html.fold]
+enable = true

@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- An mdBook documentation site under `docs/`, deployed to GitHub Pages via
+  `.github/workflows/docs.yml` on pushes touching `docs/**`. Restructures
+  the README's content into browsable chapters (installation, commands,
+  pipeline files, expressions, error behavior, known limitations); the
+  Contributing chapter embeds `CONTRIBUTING.md` directly via mdBook's
+  `{{#include}}` so the two never drift out of sync. Added `documentation`
+  to `Cargo.toml` and a docs badge to the README, both pointing at the
+  site. Requires enabling "Pages: source = GitHub Actions" once in repo
+  settings before the first deploy will actually publish.
 - GitHub issue templates (bug report, feature request) and a pull request
   template, under `.github/`.
 - `CODE_OF_CONDUCT.md` (Contributor Covenant) and `SECURITY.md`
