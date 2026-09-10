@@ -550,8 +550,9 @@ impl Stage for GroupStage {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, serde::Deserialize)]
 #[clap(rename_all = "kebab-case")]
+#[serde(rename_all = "lowercase")]
 pub enum JoinType {
     /// Keep every left record; merge matching right fields when found.
     Left,

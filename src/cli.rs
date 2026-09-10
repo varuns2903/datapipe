@@ -102,4 +102,9 @@ pub enum Command {
     },
     /// Generate a troff man page and print it to stdout
     Man,
+    /// Run a multi-stage pipeline defined in a TOML file
+    Run {
+        /// Path to a pipeline definition file
+        file: String,
+    },
 }

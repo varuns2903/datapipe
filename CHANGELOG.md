@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scoped it out as a larger algorithmic change without clear demand yet.
 
 ### Added
+- `dp run <pipeline.toml>` for declarative multi-stage pipelines defined in
+  a TOML file, run in a single process instead of chaining many `dp`
+  invocations with shell pipes. Added the `toml` crate as a dependency.
+  Refactored the per-command stage-construction logic in `run_cli` into a
+  shared `command_into_stage` function so direct CLI dispatch and pipeline
+  files build stages identically, with no duplicated logic.
 - `matches(a, "pattern")` regex function in `filter`/`map` expressions, e.g.
   `matches(.email, "^.+@example\.com$")`. The pattern must be a string
   literal so it can be compiled once at parse time rather than recompiled

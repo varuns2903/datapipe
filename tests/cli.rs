@@ -184,3 +184,82 @@ fn test_sample_command_respects_n() {
     let line_count = String::from_utf8(output).unwrap().lines().count();
     assert_eq!(line_count, 5);
 }
+
+#[test]
+fn test_run_multi_stage_pipeline_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let pipeline_path = dir.path().join("pipeline.toml");
+    std::fs::write(
+        &pipeline_path,
+        r#"
+[[stages]]
+type = "filter"
+expression = ".age >= 21"
+
+[[stages]]
+type = "sort"
+field = "age"
+desc = true
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("run")
+        .arg(pipeline_path.to_str().unwrap())
+        .write_stdin("{\"name\":\"Bob\",\"age\":19}\n{\"name\":\"Alice\",\"age\":30}\n{\"name\":\"Dave\",\"age\":25}\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Alice"))
+        .stdout(predicate::str::contains("Dave"))
+        .stdout(predicate::str::contains("Bob").not());
+}
+
+#[test]
+fn test_run_respects_out_csv_setting() {
+    let dir = tempfile::tempdir().unwrap();
+    let pipeline_path = dir.path().join("pipeline.toml");
+    std::fs::write(
+        &pipeline_path,
+        r#"
+out_csv = true
+
+[[stages]]
+type = "select"
+fields = ["name"]
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("run")
+        .arg(pipeline_path.to_str().unwrap())
+        .write_stdin("{\"name\":\"Alice\"}\n")
+        .assert()
+        .success()
+        .stdout("name\nAlice\n");
+}
+
+#[test]
+fn test_run_missing_file_fails() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("run")
+        .arg("/nonexistent/pipeline.toml")
+        .write_stdin("")
+        .assert()
+        .failure();
+}
+
+#[test]
+fn test_run_malformed_toml_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let pipeline_path = dir.path().join("bad.toml");
+    std::fs::write(&pipeline_path, "not [ valid toml").unwrap();
+
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("run")
+        .arg(pipeline_path.to_str().unwrap())
+        .write_stdin("")
+        .assert()
+        .failure();
+}
