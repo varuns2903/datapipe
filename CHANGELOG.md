@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `freq <field> [--limit <n>]` command: counts occurrences of each distinct
+  value in a field, sorted most-frequent first, with each value's
+  percentage of the stream (`xsv frequency`'s equivalent). Unlike
+  `group --count`, which is unsorted and has no percentage, this is built
+  for quick data exploration and composes naturally with `dp table`.
 - `stats` command: computes `count`/`nulls`/`distinct`/`min`/`max`/`mean`/
   `stddev` for every field in a single pass, yielding one summary record
   per field - composes naturally with `dp table` for a readable profiling

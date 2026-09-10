@@ -339,3 +339,16 @@ fn test_stats_command_computes_mean_and_stddev() {
         .stdout(predicate::str::contains("\"mean\":5.0"))
         .stdout(predicate::str::contains("\"stddev\":2.0"));
 }
+
+#[test]
+fn test_freq_command_sorts_by_count_with_limit() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("freq")
+        .arg("status")
+        .arg("--limit")
+        .arg("1")
+        .write_stdin("{\"status\":\"active\"}\n{\"status\":\"active\"}\n{\"status\":\"banned\"}\n")
+        .assert()
+        .success()
+        .stdout("{\"value\":\"active\",\"count\":2,\"percent\":66.66666666666666}\n");
+}

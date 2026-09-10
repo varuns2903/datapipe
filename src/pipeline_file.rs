@@ -83,6 +83,11 @@ pub enum StageSpec {
         #[serde(default)]
         count: bool,
     },
+    Freq {
+        field: String,
+        #[serde(default)]
+        limit: Option<usize>,
+    },
     Explode {
         field: String,
     },
@@ -138,6 +143,7 @@ pub fn into_command(spec: StageSpec) -> Command {
         StageSpec::Schema => Command::Schema,
         StageSpec::Stats => Command::Stats,
         StageSpec::Group { by, sum, count } => Command::Group { by, sum, count },
+        StageSpec::Freq { field, limit } => Command::Freq { field, limit },
         StageSpec::Explode { field } => Command::Explode { field },
         StageSpec::Rename { renames } => Command::Rename { renames },
         StageSpec::Flatten { sep } => Command::Flatten { sep },
@@ -376,5 +382,37 @@ mod tests {
         let file = parse(toml).unwrap();
         assert!(matches!(file.stages[0], StageSpec::Stats));
         assert!(matches!(into_command(StageSpec::Stats), Command::Stats));
+    }
+
+    #[test]
+    fn parses_freq_stage_with_optional_limit() {
+        let toml = r#"
+            [[stages]]
+            type = "freq"
+            field = "status"
+            limit = 5
+        "#;
+        let file = parse(toml).unwrap();
+        match &file.stages[0] {
+            StageSpec::Freq { field, limit } => {
+                assert_eq!(field, "status");
+                assert_eq!(*limit, Some(5));
+            }
+            _ => panic!("expected StageSpec::Freq"),
+        }
+    }
+
+    #[test]
+    fn freq_limit_defaults_to_none() {
+        let toml = r#"
+            [[stages]]
+            type = "freq"
+            field = "status"
+        "#;
+        let file = parse(toml).unwrap();
+        assert!(matches!(
+            file.stages[0],
+            StageSpec::Freq { limit: None, .. }
+        ));
     }
 }

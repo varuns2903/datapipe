@@ -44,6 +44,7 @@ fn command_into_stage(command: Command, strict: bool) -> miette::Result<Option<B
         Command::Schema => Box::new(SchemaStage),
         Command::Stats => Box::new(StatsStage),
         Command::Group { by, sum, count } => Box::new(GroupStage { by, sum, count }),
+        Command::Freq { field, limit } => Box::new(FreqStage { field, limit }),
         Command::Explode { field } => Box::new(ExplodeStage { field }),
         Command::Rename { renames } => {
             let mut pairs = Vec::with_capacity(renames.len());

@@ -80,6 +80,14 @@ pub enum Command {
         #[arg(long)]
         count: bool,
     },
+    /// Count occurrences of each distinct value in a field, sorted most-
+    /// frequent first, with percentage of the stream
+    Freq {
+        field: String,
+        /// Keep only the top N most frequent values
+        #[arg(long)]
+        limit: Option<usize>,
+    },
     /// Join each record with a matching record from another file
     Join {
         /// Path to a JSONL or CSV file to join against

@@ -662,6 +662,59 @@ impl Stage for GroupStage {
     }
 }
 
+pub struct FreqStage {
+    pub field: String,
+    /// Keep only the top N most frequent values.
+    pub limit: Option<usize>,
+}
+
+impl Stage for FreqStage {
+    fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
+        let field = self.field.clone();
+        let mut counts: indexmap::IndexMap<String, i64> = indexmap::IndexMap::new();
+        let mut total: i64 = 0;
+
+        for res in input {
+            let rec = match res {
+                Ok(rec) => rec,
+                Err(e) => return Box::new(std::iter::once(Err(e))),
+            };
+            let key = match rec.get(&field) {
+                Some(Value::String(s)) => s.clone(),
+                Some(val) => serde_json::to_string(val).unwrap_or_default(),
+                None => "null".to_string(),
+            };
+            *counts.entry(key).or_insert(0) += 1;
+            total += 1;
+        }
+
+        // Stable sort descending by count: ties keep first-seen order.
+        let mut pairs: Vec<(String, i64)> = counts.into_iter().collect();
+        pairs.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+        if let Some(n) = self.limit {
+            pairs.truncate(n);
+        }
+
+        let output: Vec<_> = pairs
+            .into_iter()
+            .map(|(value, count)| {
+                let mut rec = indexmap::IndexMap::new();
+                rec.insert("value".to_string(), Value::String(value));
+                rec.insert("count".to_string(), Value::Integer(count));
+                let percent = if total > 0 {
+                    (count as f64 / total as f64) * 100.0
+                } else {
+                    0.0
+                };
+                rec.insert("percent".to_string(), Value::Float(percent));
+                Ok(rec)
+            })
+            .collect();
+
+        Box::new(output.into_iter())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, serde::Deserialize)]
 #[clap(rename_all = "kebab-case")]
 #[serde(rename_all = "lowercase")]
@@ -1370,6 +1423,90 @@ mod tests {
             .unwrap();
         assert_eq!(group_b.get("count"), Some(&Value::Integer(1)));
         assert_eq!(group_b.get("sum_amount"), Some(&Value::Integer(1)));
+    }
+
+    #[test]
+    fn freq_sorts_by_count_descending() {
+        let input = stream(vec![
+            rec(&[("status", Value::String("active".to_string()))]),
+            rec(&[("status", Value::String("active".to_string()))]),
+            rec(&[("status", Value::String("banned".to_string()))]),
+            rec(&[("status", Value::String("active".to_string()))]),
+            rec(&[("status", Value::String("pending".to_string()))]),
+        ]);
+        let stage = FreqStage {
+            field: "status".to_string(),
+            limit: None,
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out.len(), 3);
+        assert_eq!(
+            out[0].get("value"),
+            Some(&Value::String("active".to_string()))
+        );
+        assert_eq!(out[0].get("count"), Some(&Value::Integer(3)));
+        assert_eq!(out[0].get("percent"), Some(&Value::Float(60.0)));
+        // Both banned/pending have count 1 - order between ties isn't
+        // asserted, just that active is strictly first.
+    }
+
+    #[test]
+    fn freq_respects_limit() {
+        let input = stream(vec![
+            rec(&[("c", Value::String("a".to_string()))]),
+            rec(&[("c", Value::String("a".to_string()))]),
+            rec(&[("c", Value::String("b".to_string()))]),
+            rec(&[("c", Value::String("c".to_string()))]),
+        ]);
+        let stage = FreqStage {
+            field: "c".to_string(),
+            limit: Some(2),
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].get("value"), Some(&Value::String("a".to_string())));
+    }
+
+    #[test]
+    fn freq_on_empty_stream_yields_no_rows() {
+        let input = stream(vec![]);
+        let stage = FreqStage {
+            field: "x".to_string(),
+            limit: None,
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out.len(), 0);
+    }
+
+    #[test]
+    fn freq_missing_field_counted_as_null() {
+        let input = stream(vec![
+            rec(&[("a", Value::Integer(1))]),
+            rec(&[("b", Value::Integer(2))]),
+        ]);
+        let stage = FreqStage {
+            field: "a".to_string(),
+            limit: None,
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out.len(), 2);
+        assert!(out
+            .iter()
+            .any(|r| r.get("value") == Some(&Value::String("null".to_string()))));
+    }
+
+    #[test]
+    fn freq_propagates_error_instead_of_ignoring_it() {
+        let input = stream_with_error(
+            vec![rec(&[("a", Value::String("x".to_string()))])],
+            vec![rec(&[("a", Value::String("y".to_string()))])],
+        );
+        let stage = FreqStage {
+            field: "a".to_string(),
+            limit: None,
+        };
+        let mut out = stage.process(input);
+        assert!(out.next().unwrap().is_err());
     }
 
     #[test]
