@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `dedup` command: drops exact duplicate records (comparing every field),
+  keeping the first occurrence (`xsv dedup`'s equivalent). Complements
+  `unique <field>`, which only dedupes on one field - `dedup` only drops
+  a record if it matches an earlier one in *every* field.
 - Numeric functions in `filter`/`map` expressions: `round(a)`, `floor(a)`,
   `ceil(a)` (all return an integer), `abs(a)` (preserves numeric type),
   and `least(a, b)` / `greatest(a, b)` (SQL-style naming, chosen to avoid

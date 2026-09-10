@@ -36,6 +36,7 @@ fn command_into_stage(command: Command, strict: bool) -> miette::Result<Option<B
         Command::Limit { max } => Box::new(LimitStage { max }),
         Command::Sort { field, desc } => Box::new(SortStage { field, desc }),
         Command::Unique { field } => Box::new(UniqueStage { field }),
+        Command::Dedup => Box::new(DedupStage),
         Command::Count => Box::new(CountStage),
         Command::Sum { field } => Box::new(SumStage { field }),
         Command::Avg { field } => Box::new(AvgStage { field }),

@@ -352,3 +352,13 @@ fn test_freq_command_sorts_by_count_with_limit() {
         .success()
         .stdout("{\"value\":\"active\",\"count\":2,\"percent\":66.66666666666666}\n");
 }
+
+#[test]
+fn test_dedup_drops_exact_duplicates_only() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("dedup")
+        .write_stdin("{\"a\":1,\"b\":2}\n{\"a\":1,\"b\":2}\n{\"a\":1,\"b\":3}\n")
+        .assert()
+        .success()
+        .stdout("{\"a\":1,\"b\":2}\n{\"a\":1,\"b\":3}\n");
+}

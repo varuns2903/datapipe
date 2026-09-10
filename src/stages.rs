@@ -448,6 +448,36 @@ impl Stage for UniqueStage {
     }
 }
 
+pub struct DedupStage;
+
+impl Stage for DedupStage {
+    fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
+        let mut seen = std::collections::HashSet::new();
+
+        let filtered = input.filter_map(move |res| match res {
+            Ok(record) => {
+                // Whole-record equality via serialization, same approach
+                // UniqueStage already uses per-field. Note this means two
+                // records with identical fields in a different insertion
+                // order are NOT considered duplicates - a rare edge case in
+                // practice (homogeneous field order is the norm for both
+                // CSV and typical JSONL), not worth the extra complexity of
+                // a order-independent comparison for this scope.
+                let key = serde_json::to_string(&record).unwrap_or_default();
+                if seen.contains(&key) {
+                    None
+                } else {
+                    seen.insert(key);
+                    Some(Ok(record))
+                }
+            }
+            Err(e) => Some(Err(e)),
+        });
+
+        Box::new(filtered)
+    }
+}
+
 pub struct SchemaStage;
 
 impl Stage for SchemaStage {
@@ -1269,6 +1299,48 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].get("id"), Some(&Value::Integer(1)));
         assert_eq!(out[1].get("id"), Some(&Value::Integer(2)));
+    }
+
+    #[test]
+    fn dedup_drops_exact_duplicate_records() {
+        let input = stream(vec![
+            rec(&[("a", Value::Integer(1)), ("b", Value::Integer(2))]),
+            rec(&[("a", Value::Integer(1)), ("b", Value::Integer(2))]),
+            rec(&[("a", Value::Integer(1)), ("b", Value::Integer(3))]),
+        ]);
+        let out = collect_ok(DedupStage.process(input));
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].get("b"), Some(&Value::Integer(2)));
+        assert_eq!(out[1].get("b"), Some(&Value::Integer(3)));
+    }
+
+    #[test]
+    fn dedup_distinguishes_records_unique_keeps_would_collapse() {
+        // Same "a" value but different "b" - unique(a) would collapse these
+        // to one record, dedup must keep both since they aren't identical.
+        let input = stream(vec![
+            rec(&[("a", Value::Integer(1)), ("b", Value::Integer(2))]),
+            rec(&[("a", Value::Integer(1)), ("b", Value::Integer(3))]),
+        ]);
+        let out = collect_ok(DedupStage.process(input));
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn dedup_on_empty_stream_yields_nothing() {
+        let input = stream(vec![]);
+        let out = collect_ok(DedupStage.process(input));
+        assert_eq!(out.len(), 0);
+    }
+
+    #[test]
+    fn dedup_propagates_errors() {
+        let input = stream_with_error(
+            vec![rec(&[("a", Value::Integer(1))])],
+            vec![rec(&[("a", Value::Integer(2))])],
+        );
+        let out: Vec<_> = DedupStage.process(input).collect();
+        assert!(out.iter().any(|r| r.is_err()));
     }
 
     #[test]

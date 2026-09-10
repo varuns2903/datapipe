@@ -61,6 +61,7 @@ pub enum StageSpec {
     Unique {
         field: String,
     },
+    Dedup,
     Count,
     Sum {
         field: String,
@@ -135,6 +136,7 @@ pub fn into_command(spec: StageSpec) -> Command {
         StageSpec::Limit { max } => Command::Limit { max },
         StageSpec::Sort { field, desc } => Command::Sort { field, desc },
         StageSpec::Unique { field } => Command::Unique { field },
+        StageSpec::Dedup => Command::Dedup,
         StageSpec::Count => Command::Count,
         StageSpec::Sum { field } => Command::Sum { field },
         StageSpec::Avg { field } => Command::Avg { field },
@@ -414,5 +416,16 @@ mod tests {
             file.stages[0],
             StageSpec::Freq { limit: None, .. }
         ));
+    }
+
+    #[test]
+    fn parses_dedup_stage() {
+        let toml = r#"
+            [[stages]]
+            type = "dedup"
+        "#;
+        let file = parse(toml).unwrap();
+        assert!(matches!(file.stages[0], StageSpec::Dedup));
+        assert!(matches!(into_command(StageSpec::Dedup), Command::Dedup));
     }
 }

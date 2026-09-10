@@ -48,6 +48,9 @@ pub enum Command {
     },
     /// Keep only the first record for each distinct value of a field
     Unique { field: String },
+    /// Drop exact duplicate records (comparing all fields), keeping the
+    /// first occurrence
+    Dedup,
     /// Consume the stream and yield the total record count
     Count,
     /// Compute the sum of a numeric field
