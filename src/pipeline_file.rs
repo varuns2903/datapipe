@@ -75,6 +75,7 @@ pub enum StageSpec {
         field: String,
     },
     Schema,
+    Stats,
     Group {
         by: String,
         #[serde(default)]
@@ -135,6 +136,7 @@ pub fn into_command(spec: StageSpec) -> Command {
         StageSpec::Min { field } => Command::Min { field },
         StageSpec::Max { field } => Command::Max { field },
         StageSpec::Schema => Command::Schema,
+        StageSpec::Stats => Command::Stats,
         StageSpec::Group { by, sum, count } => Command::Group { by, sum, count },
         StageSpec::Explode { field } => Command::Explode { field },
         StageSpec::Rename { renames } => Command::Rename { renames },
@@ -363,5 +365,16 @@ mod tests {
         "#;
         let file = parse(toml).unwrap();
         assert!(file.out_table);
+    }
+
+    #[test]
+    fn parses_stats_stage() {
+        let toml = r#"
+            [[stages]]
+            type = "stats"
+        "#;
+        let file = parse(toml).unwrap();
+        assert!(matches!(file.stages[0], StageSpec::Stats));
+        assert!(matches!(into_command(StageSpec::Stats), Command::Stats));
     }
 }

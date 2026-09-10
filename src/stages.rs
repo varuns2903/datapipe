@@ -488,6 +488,107 @@ impl Stage for SchemaStage {
     }
 }
 
+#[derive(Default)]
+struct FieldStats {
+    /// Records where this field was present at all (any value, including null).
+    count: i64,
+    /// Records where this field was present and explicitly null.
+    null_count: i64,
+    numeric_count: i64,
+    sum: f64,
+    sum_sq: f64,
+    min: Option<Value>,
+    max: Option<Value>,
+    /// Memory usage is proportional to the number of *distinct* values seen
+    /// for this field, same tradeoff as `unique`/`group` - documented in
+    /// the README rather than bounded, since typical field cardinality is
+    /// small relative to stream length.
+    distinct: std::collections::HashSet<String>,
+}
+
+pub struct StatsStage;
+
+impl Stage for StatsStage {
+    fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
+        let mut stats: indexmap::IndexMap<String, FieldStats> = indexmap::IndexMap::new();
+
+        for res in input {
+            let rec = match res {
+                Ok(rec) => rec,
+                Err(e) => return Box::new(std::iter::once(Err(e))),
+            };
+            for (key, val) in rec {
+                let entry = stats.entry(key).or_default();
+                entry.count += 1;
+
+                match &val {
+                    Value::Null => entry.null_count += 1,
+                    Value::Integer(i) => {
+                        entry.numeric_count += 1;
+                        entry.sum += *i as f64;
+                        entry.sum_sq += (*i as f64).powi(2);
+                    }
+                    Value::Float(f) => {
+                        entry.numeric_count += 1;
+                        entry.sum += f;
+                        entry.sum_sq += f.powi(2);
+                    }
+                    _ => {}
+                }
+
+                if !matches!(val, Value::Null) {
+                    entry.min = Some(match entry.min.take() {
+                        Some(cur)
+                            if crate::model::cmp_values(&val, &cur) != std::cmp::Ordering::Less =>
+                        {
+                            cur
+                        }
+                        _ => val.clone(),
+                    });
+                    entry.max = Some(match entry.max.take() {
+                        Some(cur)
+                            if crate::model::cmp_values(&val, &cur)
+                                != std::cmp::Ordering::Greater =>
+                        {
+                            cur
+                        }
+                        _ => val.clone(),
+                    });
+                }
+
+                entry
+                    .distinct
+                    .insert(serde_json::to_string(&val).unwrap_or_default());
+            }
+        }
+
+        let mut output = Vec::new();
+        for (field, s) in stats {
+            let mut rec = indexmap::IndexMap::new();
+            rec.insert("field".to_string(), Value::String(field));
+            rec.insert("count".to_string(), Value::Integer(s.count));
+            rec.insert("nulls".to_string(), Value::Integer(s.null_count));
+            rec.insert(
+                "distinct".to_string(),
+                Value::Integer(s.distinct.len() as i64),
+            );
+            rec.insert("min".to_string(), s.min.unwrap_or(Value::Null));
+            rec.insert("max".to_string(), s.max.unwrap_or(Value::Null));
+            if s.numeric_count > 0 {
+                let mean = s.sum / s.numeric_count as f64;
+                let variance = (s.sum_sq / s.numeric_count as f64 - mean * mean).max(0.0);
+                rec.insert("mean".to_string(), Value::Float(mean));
+                rec.insert("stddev".to_string(), Value::Float(variance.sqrt()));
+            } else {
+                rec.insert("mean".to_string(), Value::Null);
+                rec.insert("stddev".to_string(), Value::Null);
+            }
+            output.push(Ok(rec));
+        }
+        Box::new(output.into_iter())
+    }
+}
+
 pub struct GroupStage {
     pub by: String,
     pub sum: Option<String>,
@@ -1138,6 +1239,98 @@ mod tests {
             out[0].get("age"),
             Some(&Value::String("integer | null".to_string()))
         );
+    }
+
+    fn stats_field_row<'a>(out: &'a [Record], field: &str) -> &'a Record {
+        out.iter()
+            .find(|r| r.get("field") == Some(&Value::String(field.to_string())))
+            .unwrap()
+    }
+
+    #[test]
+    fn stats_computes_mean_and_population_stddev() {
+        // Classic textbook example: mean 5, population stddev 2.
+        let input = stream(
+            [2, 4, 4, 4, 5, 5, 7, 9]
+                .iter()
+                .map(|n| rec(&[("x", Value::Integer(*n))]))
+                .collect(),
+        );
+        let out = collect_ok(StatsStage.process(input));
+        let row = stats_field_row(&out, "x");
+        assert_eq!(row.get("count"), Some(&Value::Integer(8)));
+        assert_eq!(row.get("mean"), Some(&Value::Float(5.0)));
+        assert_eq!(row.get("stddev"), Some(&Value::Float(2.0)));
+        assert_eq!(row.get("min"), Some(&Value::Integer(2)));
+        assert_eq!(row.get("max"), Some(&Value::Integer(9)));
+    }
+
+    #[test]
+    fn stats_counts_nulls_and_missing_separately() {
+        // "a" is present (once null) in 2 of 3 records; "b" only in the 3rd.
+        let input = stream(vec![
+            rec(&[("a", Value::Integer(1))]),
+            rec(&[("a", Value::Null)]),
+            rec(&[("b", Value::Integer(2))]),
+        ]);
+        let out = collect_ok(StatsStage.process(input));
+        let a = stats_field_row(&out, "a");
+        assert_eq!(a.get("count"), Some(&Value::Integer(2)));
+        assert_eq!(a.get("nulls"), Some(&Value::Integer(1)));
+        let b = stats_field_row(&out, "b");
+        assert_eq!(b.get("count"), Some(&Value::Integer(1)));
+        assert_eq!(b.get("nulls"), Some(&Value::Integer(0)));
+    }
+
+    #[test]
+    fn stats_tracks_distinct_count() {
+        let input = stream(vec![
+            rec(&[("status", Value::String("a".to_string()))]),
+            rec(&[("status", Value::String("a".to_string()))]),
+            rec(&[("status", Value::String("b".to_string()))]),
+        ]);
+        let out = collect_ok(StatsStage.process(input));
+        let row = stats_field_row(&out, "status");
+        assert_eq!(row.get("distinct"), Some(&Value::Integer(2)));
+    }
+
+    #[test]
+    fn stats_non_numeric_field_has_null_mean_and_stddev_but_real_min_max() {
+        let input = stream(vec![
+            rec(&[("name", Value::String("Alice".to_string()))]),
+            rec(&[("name", Value::String("Bob".to_string()))]),
+        ]);
+        let out = collect_ok(StatsStage.process(input));
+        let row = stats_field_row(&out, "name");
+        assert_eq!(row.get("mean"), Some(&Value::Null));
+        assert_eq!(row.get("stddev"), Some(&Value::Null));
+        assert_eq!(row.get("min"), Some(&Value::String("Alice".to_string())));
+        assert_eq!(row.get("max"), Some(&Value::String("Bob".to_string())));
+    }
+
+    #[test]
+    fn stats_on_single_value_has_zero_stddev() {
+        let input = stream(vec![rec(&[("x", Value::Integer(5))])]);
+        let out = collect_ok(StatsStage.process(input));
+        let row = stats_field_row(&out, "x");
+        assert_eq!(row.get("stddev"), Some(&Value::Float(0.0)));
+    }
+
+    #[test]
+    fn stats_on_empty_stream_yields_no_rows() {
+        let input = stream(vec![]);
+        let out = collect_ok(StatsStage.process(input));
+        assert_eq!(out.len(), 0);
+    }
+
+    #[test]
+    fn stats_propagates_error_instead_of_ignoring_it() {
+        let input = stream_with_error(
+            vec![rec(&[("a", Value::Integer(1))])],
+            vec![rec(&[("a", Value::Integer(2))])],
+        );
+        let mut out = StatsStage.process(input);
+        assert!(out.next().unwrap().is_err());
     }
 
     #[test]

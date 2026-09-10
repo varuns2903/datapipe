@@ -328,3 +328,14 @@ fn test_table_command_on_empty_stream_produces_no_output() {
         .success()
         .stdout("");
 }
+
+#[test]
+fn test_stats_command_computes_mean_and_stddev() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("stats")
+        .write_stdin("{\"x\":2}\n{\"x\":4}\n{\"x\":4}\n{\"x\":4}\n{\"x\":5}\n{\"x\":5}\n{\"x\":7}\n{\"x\":9}\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"mean\":5.0"))
+        .stdout(predicate::str::contains("\"stddev\":2.0"));
+}

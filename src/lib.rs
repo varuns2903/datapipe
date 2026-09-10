@@ -42,6 +42,7 @@ fn command_into_stage(command: Command, strict: bool) -> miette::Result<Option<B
         Command::Min { field } => Box::new(MinStage { field }),
         Command::Max { field } => Box::new(MaxStage { field }),
         Command::Schema => Box::new(SchemaStage),
+        Command::Stats => Box::new(StatsStage),
         Command::Group { by, sum, count } => Box::new(GroupStage { by, sum, count }),
         Command::Explode { field } => Box::new(ExplodeStage { field }),
         Command::Rename { renames } => {

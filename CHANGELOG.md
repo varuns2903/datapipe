@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `stats` command: computes `count`/`nulls`/`distinct`/`min`/`max`/`mean`/
+  `stddev` for every field in a single pass, yielding one summary record
+  per field - composes naturally with `dp table` for a readable profiling
+  view. Previously getting this required N separate `min`/`max`/`sum`/`avg`
+  invocations per field, one full stream pass each. `mean`/`stddev` are
+  `null` for non-numeric fields; `min`/`max` work for any type via the
+  existing `cmp_values` ordering. `distinct` tracking has the same
+  proportional-to-cardinality memory tradeoff as `unique`/`group`.
+  Verified the stddev computation against the classic textbook example
+  (2,4,4,4,5,5,7,9 → mean 5, population stddev 2).
 - `table` output command: an aligned, human-readable table (header row,
   dashed separator, data rows) instead of JSONL/CSV — like `column -t` or
   `mlr --opprint`. Unlike every other output writer here, this buffers the

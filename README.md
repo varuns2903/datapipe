@@ -117,6 +117,7 @@ Run `dp <command> --help` for full details on any command below.
 
 ### Schema & Formatting
 - `schema`: Inspects (up to the first 10,000 records of) the stream and infers the data types of all fields, e.g. `"integer | null"` if a field is sometimes explicitly `null`. A field that's simply absent from a record isn't counted for that record.
+- `stats`: Computes `count`/`nulls`/`distinct`/`min`/`max`/`mean`/`stddev` for every field in a single pass, yielding one summary record per field (pipe into `dp table` for a readable view). `mean`/`stddev` are `null` for non-numeric fields. Memory usage for `distinct` is proportional to the number of *distinct* values per field, same tradeoff as `unique`/`group`.
 - `csv`: Outputs the resulting stream as a CSV instead of JSONL. Array/object fields are rendered as `[complex]`.
 - `table`: Outputs an aligned, human-readable table (header row, dashed separator, then data rows) instead of JSONL — like `column -t`. Unlike the other output commands, this buffers the entire stream first, since column widths depend on every value seen. Missing fields render blank; array/object fields render as `[complex]`.
 - `--in-csv`: A global flag to read the input as CSV instead of JSONL. CSV values are inferred as integer, float, boolean, or string. Integers are only inferred when they round-trip exactly (e.g. `"25"` → `25`), so values like zip codes or phone numbers with a leading zero (`"00501"`) are correctly kept as strings rather than silently losing that leading zero.
@@ -158,7 +159,7 @@ fields = ["name", "age"]
 cat users.jsonl | dp run pipeline.toml
 ```
 
-Each `[[stages]]` table's `type` corresponds to a subcommand (`filter`, `select`, `sort`, `unique`, `count`, `sum`, `avg`, `min`, `max`, `schema`, `group`, `explode`, `rename`, `flatten`, `sample`, `map`, `join`) with the same field names as that subcommand's flags/arguments — e.g. `join` takes `file`, `on`, and an optional `join_type` (`"left"` | `"inner"` | `"right"` | `"full"`, defaults to `"left"`). Format/utility commands (`csv`, `table`, `completions`, `man`, `run` itself) aren't valid `[[stages]]` entries — use the top-level `out_csv`/`out_table` settings for those output formats instead.
+Each `[[stages]]` table's `type` corresponds to a subcommand (`filter`, `select`, `sort`, `unique`, `count`, `sum`, `avg`, `min`, `max`, `schema`, `stats`, `group`, `explode`, `rename`, `flatten`, `sample`, `map`, `join`) with the same field names as that subcommand's flags/arguments — e.g. `join` takes `file`, `on`, and an optional `join_type` (`"left"` | `"inner"` | `"right"` | `"full"`, defaults to `"left"`). Format/utility commands (`csv`, `table`, `completions`, `man`, `run` itself) aren't valid `[[stages]]` entries — use the top-level `out_csv`/`out_table` settings for those output formats instead.
 
 ## Expressions
 

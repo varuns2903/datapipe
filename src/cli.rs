@@ -60,6 +60,9 @@ pub enum Command {
     Max { field: String },
     /// Infer and print the data type(s) of every field in the stream
     Schema,
+    /// Compute count/nulls/distinct/min/max/mean/stddev for every field in
+    /// one pass, yielding one summary record per field
+    Stats,
     /// Pass the stream through unchanged (useful for debugging a pipeline)
     Inspect,
     /// Output the stream as CSV instead of JSONL
