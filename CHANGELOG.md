@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Date/time functions in `filter`/`map` expressions: `to_unix(a)` parses an
+  RFC3339 datetime or bare `"YYYY-MM-DD"` date into a Unix timestamp,
+  enabling date-range filtering via ordinary integer comparison; `year(a)`,
+  `month(a)`, `day(a)` extract calendar components; `now()` returns the
+  current Unix timestamp. Previously there was no way to filter or extract
+  from timestamp fields at all, despite how common they are in real-world
+  JSON. Added the `chrono` crate (minimal features: `clock`, `std` only)
+  as a dependency. Verified `to_unix`'s output against a hand-computed
+  timestamp rather than just eyeballing a plausible-looking number.
 - `search <text> [--regex]` command: keeps records where *any* field's
   value contains the given text, without needing to know the field names
   up front (`xsv search`'s equivalent). Previously the only way to search

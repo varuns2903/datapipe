@@ -15,6 +15,23 @@ impl PartialEq for CompiledRegex {
     }
 }
 
+/// Parses a datetime string for the date/time expression functions. Tries
+/// RFC3339 first (the standard JSON datetime convention, e.g.
+/// "2024-01-15T10:30:00Z"), then falls back to a bare "YYYY-MM-DD" date
+/// (common in real-world data that only stores a calendar date), treated as
+/// midnight UTC. Returns `None` for anything else rather than erroring -
+/// consistent with how every other function in this module degrades to
+/// `null` on a value it can't handle, rather than failing the whole record.
+fn parse_datetime(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Some(dt.with_timezone(&chrono::Utc));
+    }
+    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+        .ok()
+        .and_then(|d| d.and_hms_opt(0, 0, 0))
+        .map(|dt| dt.and_utc())
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Operator {
     Eq,
@@ -147,6 +164,19 @@ impl Expr {
                             a.clone()
                         }
                     }
+                    ("now", []) => Value::Integer(chrono::Utc::now().timestamp()),
+                    ("to_unix", [Value::String(s)]) => parse_datetime(s)
+                        .map(|dt| Value::Integer(dt.timestamp()))
+                        .unwrap_or(Value::Null),
+                    ("year", [Value::String(s)]) => parse_datetime(s)
+                        .map(|dt| Value::Integer(chrono::Datelike::year(&dt) as i64))
+                        .unwrap_or(Value::Null),
+                    ("month", [Value::String(s)]) => parse_datetime(s)
+                        .map(|dt| Value::Integer(chrono::Datelike::month(&dt) as i64))
+                        .unwrap_or(Value::Null),
+                    ("day", [Value::String(s)]) => parse_datetime(s)
+                        .map(|dt| Value::Integer(chrono::Datelike::day(&dt) as i64))
+                        .unwrap_or(Value::Null),
                     // Right arity/known name (guaranteed by the parser) but a
                     // non-string operand at runtime, e.g. contains(.age, "x")
                     // where .age is an integer - null, consistent with how
@@ -676,7 +706,9 @@ impl Parser {
 
                 let expected_arity = match name.as_str() {
                     "contains" | "starts_with" | "ends_with" | "least" | "greatest" => 2,
-                    "lower" | "upper" | "round" | "floor" | "ceil" | "abs" => 1,
+                    "lower" | "upper" | "round" | "floor" | "ceil" | "abs" | "to_unix" | "year"
+                    | "month" | "day" => 1,
+                    "now" => 0,
                     other => return Err(anyhow!("Unknown function '{}'", other)),
                 };
                 if args.len() != expected_arity {
@@ -1525,6 +1557,100 @@ mod tests {
     fn parse_rejects_numeric_function_wrong_arity() {
         assert!(parse("round(.a, .b)").is_err());
         assert!(parse("least(.a)").is_err());
+    }
+
+    // --- date/time functions ---
+
+    #[test]
+    fn eval_to_unix_matches_hand_computed_timestamp() {
+        // 2024-01-15T10:30:00Z, hand-verified: 1704067200 (2024-01-01
+        // 00:00 UTC) + 14 days (1209600s) + 10:30:00 (37800s) = 1705314600.
+        let rec = record_with(&[("ts", Value::String("2024-01-15T10:30:00Z".to_string()))]);
+        assert_eq!(
+            parse("to_unix(.ts)").unwrap().evaluate(&rec),
+            Value::Integer(1705314600)
+        );
+    }
+
+    #[test]
+    fn eval_year_month_day_from_rfc3339() {
+        let rec = record_with(&[("ts", Value::String("2024-01-15T10:30:00Z".to_string()))]);
+        assert_eq!(
+            parse("year(.ts)").unwrap().evaluate(&rec),
+            Value::Integer(2024)
+        );
+        assert_eq!(
+            parse("month(.ts)").unwrap().evaluate(&rec),
+            Value::Integer(1)
+        );
+        assert_eq!(
+            parse("day(.ts)").unwrap().evaluate(&rec),
+            Value::Integer(15)
+        );
+    }
+
+    #[test]
+    fn eval_year_from_bare_date_fallback() {
+        // No time component/timezone - should still parse via the
+        // %Y-%m-%d fallback, not just RFC3339.
+        let rec = record_with(&[("ts", Value::String("2024-03-20".to_string()))]);
+        assert_eq!(
+            parse("year(.ts)").unwrap().evaluate(&rec),
+            Value::Integer(2024)
+        );
+        assert_eq!(
+            parse("month(.ts)").unwrap().evaluate(&rec),
+            Value::Integer(3)
+        );
+        assert_eq!(
+            parse("day(.ts)").unwrap().evaluate(&rec),
+            Value::Integer(20)
+        );
+    }
+
+    #[test]
+    fn eval_date_function_on_invalid_string_is_null() {
+        let rec = record_with(&[("ts", Value::String("not a date".to_string()))]);
+        assert_eq!(parse("year(.ts)").unwrap().evaluate(&rec), Value::Null);
+        assert_eq!(parse("to_unix(.ts)").unwrap().evaluate(&rec), Value::Null);
+    }
+
+    #[test]
+    fn eval_date_function_on_non_string_is_null() {
+        let rec = record_with(&[("ts", Value::Integer(123))]);
+        assert_eq!(parse("year(.ts)").unwrap().evaluate(&rec), Value::Null);
+    }
+
+    #[test]
+    fn eval_year_usable_in_filter_comparison() {
+        let rec = record_with(&[("ts", Value::String("2024-05-01T00:00:00Z".to_string()))]);
+        assert_eq!(
+            parse("year(.ts) == 2024").unwrap().evaluate(&rec),
+            Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn eval_now_returns_a_plausible_current_timestamp() {
+        let rec = record_with(&[]);
+        let before = chrono::Utc::now().timestamp();
+        let result = parse("now()").unwrap().evaluate(&rec);
+        let after = chrono::Utc::now().timestamp();
+        match result {
+            Value::Integer(t) => assert!(t >= before && t <= after),
+            other => panic!("expected Integer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_rejects_now_with_arguments() {
+        assert!(parse("now(1)").is_err());
+    }
+
+    #[test]
+    fn parse_rejects_date_function_wrong_arity() {
+        assert!(parse("year(.a, .b)").is_err());
+        assert!(parse("to_unix()").is_err());
     }
 
     #[test]
