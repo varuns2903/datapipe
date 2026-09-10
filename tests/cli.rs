@@ -308,3 +308,23 @@ fn test_select_exclude_drops_named_field() {
         .stdout(predicate::str::contains("Alice"))
         .stdout(predicate::str::contains("password").not());
 }
+
+#[test]
+fn test_table_command_aligns_output() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("table")
+        .write_stdin("{\"name\":\"Alice\",\"age\":30}\n{\"name\":\"Bo\",\"age\":9}\n")
+        .assert()
+        .success()
+        .stdout("name   age\n-----  ---\nAlice  30\nBo     9\n");
+}
+
+#[test]
+fn test_table_command_on_empty_stream_produces_no_output() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("table")
+        .write_stdin("")
+        .assert()
+        .success()
+        .stdout("");
+}

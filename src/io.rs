@@ -142,17 +142,96 @@ fn write_csv_row<W: Write>(
 ) -> Result<()> {
     let mut row = Vec::new();
     for header in headers {
-        let val_str = match record.get(header).unwrap_or(&Value::Null) {
-            Value::Null => "".to_string(),
-            Value::Boolean(b) => b.to_string(),
-            Value::Integer(i) => i.to_string(),
-            Value::Float(f) => f.to_string(),
-            Value::String(s) => s.clone(),
-            Value::Array(_) | Value::Object(_) => "[complex]".to_string(), // Simplify complex structures for CSV
-        };
-        row.push(val_str);
+        row.push(value_to_display_string(
+            record.get(header).unwrap_or(&Value::Null),
+        ));
     }
     csv_writer.write_record(&row)?;
+    Ok(())
+}
+
+/// Renders a `Value` as plain text for tabular display (CSV cells, table
+/// columns) - not JSON, just a human-readable flat representation.
+fn value_to_display_string(v: &Value) -> String {
+    match v {
+        Value::Null => "".to_string(),
+        Value::Boolean(b) => b.to_string(),
+        Value::Integer(i) => i.to_string(),
+        Value::Float(f) => f.to_string(),
+        Value::String(s) => s.clone(),
+        Value::Array(_) | Value::Object(_) => "[complex]".to_string(),
+    }
+}
+
+// Table Out
+//
+// Renders an aligned, human-readable table (header + dashed separator +
+// rows), similar to `column -t` or `mlr --opprint`. Unlike the streaming
+// writers above, this must buffer the entire stream first: column widths
+// depend on every value in that column, which can't be known until the
+// whole stream has been seen.
+pub fn write_table_stream<W: Write>(
+    mut writer: W,
+    records: impl Iterator<Item = Result<Record>>,
+) -> Result<()> {
+    let mut rows: Vec<Record> = Vec::new();
+    let mut headers: Vec<String> = Vec::new();
+    let mut seen_headers: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for res in records {
+        let rec = res?;
+        for key in rec.keys() {
+            if seen_headers.insert(key.clone()) {
+                headers.push(key.clone());
+            }
+        }
+        rows.push(rec);
+    }
+
+    if headers.is_empty() {
+        return Ok(());
+    }
+
+    let cells: Vec<Vec<String>> = rows
+        .iter()
+        .map(|rec| {
+            headers
+                .iter()
+                .map(|h| value_to_display_string(rec.get(h).unwrap_or(&Value::Null)))
+                .collect()
+        })
+        .collect();
+
+    let widths: Vec<usize> = headers
+        .iter()
+        .enumerate()
+        .map(|(i, h)| {
+            cells
+                .iter()
+                .map(|row| row[i].chars().count())
+                .max()
+                .unwrap_or(0)
+                .max(h.chars().count())
+        })
+        .collect();
+
+    write_table_row(&mut writer, &headers, &widths)?;
+    let dashes: Vec<String> = widths.iter().map(|w| "-".repeat(*w)).collect();
+    write_table_row(&mut writer, &dashes, &widths)?;
+    for row in &cells {
+        write_table_row(&mut writer, row, &widths)?;
+    }
+
+    Ok(())
+}
+
+fn write_table_row<W: Write>(writer: &mut W, cells: &[String], widths: &[usize]) -> Result<()> {
+    let padded: Vec<String> = cells
+        .iter()
+        .zip(widths)
+        .map(|(cell, width)| format!("{:<width$}", cell, width = width))
+        .collect();
+    writeln!(writer, "{}", padded.join("  ").trim_end())?;
     Ok(())
 }
 
@@ -265,5 +344,77 @@ mod tests {
         let mut out = Vec::new();
         write_json_stream(&mut out, std::iter::once(Ok(rec)), true).unwrap();
         assert_eq!(String::from_utf8(out).unwrap(), "{\n  \"a\": 1\n}\n");
+    }
+
+    fn rec(pairs: &[(&str, Value)]) -> Record {
+        let mut r = Record::new();
+        for (k, v) in pairs {
+            r.insert(k.to_string(), v.clone());
+        }
+        r
+    }
+
+    fn table_output(records: Vec<Record>) -> String {
+        let mut out = Vec::new();
+        write_table_stream(&mut out, records.into_iter().map(Ok)).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn table_aligns_columns_by_max_width() {
+        let out = table_output(vec![
+            rec(&[
+                ("name", Value::String("Alice".to_string())),
+                ("age", Value::Integer(30)),
+            ]),
+            rec(&[
+                ("name", Value::String("Bo".to_string())),
+                ("age", Value::Integer(9)),
+            ]),
+        ]);
+        assert_eq!(
+            out,
+            "name   age\n\
+             -----  ---\n\
+             Alice  30\n\
+             Bo     9\n"
+        );
+    }
+
+    #[test]
+    fn table_unions_headers_across_records_missing_fields_blank() {
+        let out = table_output(vec![
+            rec(&[("a", Value::Integer(1)), ("b", Value::Integer(2))]),
+            rec(&[("a", Value::Integer(10))]),
+        ]);
+        // Header union preserves first-seen order: a, b.
+        assert!(out.starts_with("a   b\n"));
+        assert!(out.contains("10"));
+    }
+
+    #[test]
+    fn table_on_empty_stream_produces_no_output() {
+        let out = table_output(vec![]);
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn table_renders_complex_values_as_placeholder() {
+        let out = table_output(vec![rec(&[(
+            "tags",
+            Value::Array(vec![Value::Integer(1)]),
+        )])]);
+        assert!(out.contains("[complex]"));
+    }
+
+    #[test]
+    fn value_to_display_string_matches_csv_cell_rendering() {
+        assert_eq!(value_to_display_string(&Value::Null), "");
+        assert_eq!(value_to_display_string(&Value::Boolean(true)), "true");
+        assert_eq!(value_to_display_string(&Value::Integer(5)), "5");
+        assert_eq!(
+            value_to_display_string(&Value::String("x".to_string())),
+            "x"
+        );
     }
 }

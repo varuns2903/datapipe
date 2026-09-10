@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `table` output command: an aligned, human-readable table (header row,
+  dashed separator, data rows) instead of JSONL/CSV — like `column -t` or
+  `mlr --opprint`. Unlike every other output writer here, this buffers the
+  entire stream first, since column widths depend on every value seen;
+  documented that tradeoff explicitly. Also available as an `out_table`
+  setting in pipeline files, mirroring `out_csv`. Refactored the CSV/JSON
+  output-format selection from a `bool` into an `OutputFormat` enum to
+  make room for the third format cleanly.
 - `select --exclude` mode: `<fields>` becomes an exclusion list (keep
   everything except the named fields, field order preserved) instead of
   the default inclusion list, e.g. `dp select password,secret --exclude`.

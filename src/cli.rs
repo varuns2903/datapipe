@@ -64,6 +64,9 @@ pub enum Command {
     Inspect,
     /// Output the stream as CSV instead of JSONL
     Csv,
+    /// Output the stream as an aligned, human-readable table (buffers the
+    /// whole stream to compute column widths)
+    Table,
     /// Group records by a field, optionally summing another field and/or counting
     Group {
         by: String,

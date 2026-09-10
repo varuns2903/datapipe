@@ -15,7 +15,7 @@ use stages::*;
 use std::io::{stdin, stdout, BufReader, BufWriter, Write};
 
 /// Builds the stage for a single `Command`, if it represents a pipeline
-/// stage at all. Returns `Ok(None)` for `Csv`/`Inspect`, which don't add a
+/// stage at all. Returns `Ok(None)` for `Csv`/`Table`/`Inspect`, which don't add a
 /// stage (they're handled by the caller as output-format/no-op markers).
 /// Shared by both direct CLI dispatch and `run`'s multi-stage pipeline
 /// files, so there is exactly one place that knows how to turn a `Command`
@@ -108,7 +108,7 @@ fn command_into_stage(command: Command, strict: bool) -> miette::Result<Option<B
                 join_type,
             })
         }
-        Command::Inspect | Command::Csv => return Ok(None),
+        Command::Inspect | Command::Csv | Command::Table => return Ok(None),
         Command::Completions { .. } | Command::Man | Command::Run { .. } => {
             unreachable!("handled before pipeline setup")
         }
@@ -149,18 +149,26 @@ fn read_input(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutputFormat {
+    Json,
+    Csv,
+    Table,
+}
+
 fn write_output(
     writer: BufWriter<std::io::StdoutLock>,
-    out_csv: bool,
+    format: OutputFormat,
     pretty: bool,
     result_stream: crate::pipeline::RecordStream,
 ) -> miette::Result<()> {
-    if out_csv {
-        crate::io::write_csv_stream(writer, result_stream)
-            .map_err(|e| miette::miette!(e.to_string()))
-    } else {
-        crate::io::write_json_stream(writer, result_stream, pretty)
-            .map_err(|e| miette::miette!(e.to_string()))
+    match format {
+        OutputFormat::Csv => crate::io::write_csv_stream(writer, result_stream)
+            .map_err(|e| miette::miette!(e.to_string())),
+        OutputFormat::Table => crate::io::write_table_stream(writer, result_stream)
+            .map_err(|e| miette::miette!(e.to_string())),
+        OutputFormat::Json => crate::io::write_json_stream(writer, result_stream, pretty)
+            .map_err(|e| miette::miette!(e.to_string())),
     }
 }
 
@@ -224,7 +232,14 @@ pub fn run_cli() -> miette::Result<()> {
 
         let result_stream = pipeline.process(records);
         let pretty = spec.pretty || cli.pretty;
-        return write_output(writer, spec.out_csv, pretty, result_stream);
+        let format = if spec.out_table {
+            OutputFormat::Table
+        } else if spec.out_csv {
+            OutputFormat::Csv
+        } else {
+            OutputFormat::Json
+        };
+        return write_output(writer, format, pretty, result_stream);
     }
 
     let stdin_handle = stdin();
@@ -236,7 +251,11 @@ pub fn run_cli() -> miette::Result<()> {
     let records = apply_strict_policy(records, cli.strict);
 
     let mut pipeline = Pipeline::new();
-    let is_csv_out = matches!(cli.command, Command::Csv);
+    let format = match cli.command {
+        Command::Csv => OutputFormat::Csv,
+        Command::Table => OutputFormat::Table,
+        _ => OutputFormat::Json,
+    };
     let strict = cli.strict;
 
     if let Some(stage) = command_into_stage(cli.command, strict)? {
@@ -244,5 +263,5 @@ pub fn run_cli() -> miette::Result<()> {
     }
 
     let result_stream = pipeline.process(records);
-    write_output(writer, is_csv_out, cli.pretty, result_stream)
+    write_output(writer, format, cli.pretty, result_stream)
 }
