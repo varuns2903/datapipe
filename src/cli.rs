@@ -33,6 +33,9 @@ pub enum Command {
     Select {
         #[arg(value_delimiter = ',')]
         fields: Vec<String>,
+        /// Treat `fields` as an exclusion list: keep everything except these
+        #[arg(long)]
+        exclude: bool,
     },
     /// Halt the stream after yielding N records
     Limit { max: usize },

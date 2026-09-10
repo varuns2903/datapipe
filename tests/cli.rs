@@ -295,3 +295,16 @@ fn test_default_output_stays_compact() {
         .success()
         .stdout("{\"a\":1}\n");
 }
+
+#[test]
+fn test_select_exclude_drops_named_field() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("select")
+        .arg("password")
+        .arg("--exclude")
+        .write_stdin("{\"name\":\"Alice\",\"password\":\"secret\"}\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Alice"))
+        .stdout(predicate::str::contains("password").not());
+}

@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `select --exclude` mode: `<fields>` becomes an exclusion list (keep
+  everything except the named fields, field order preserved) instead of
+  the default inclusion list, e.g. `dp select password,secret --exclude`.
+  Previously `select` was allow-list only, so dropping a couple of fields
+  from a wide/unknown-schema record meant naming every other field.
 - `--pretty` / `-p` global flag to indent JSON output for human reading.
   Off by default (output stays compact JSONL). Also available as a
   `pretty` setting in pipeline files, combining with the CLI flag the

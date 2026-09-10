@@ -85,7 +85,7 @@ Run `dp <command> --help` for full details on any command below.
 
 ### Transformations
 - `filter <expression>`: Keeps only records where the expression evaluates to `true`.
-- `select <fields>`: Keeps only the specified comma-separated fields. Missing fields are filled with `null`.
+- `select <fields> [--exclude]`: Keeps only the specified comma-separated fields. Missing fields are filled with `null`. With `--exclude`, `<fields>` is instead an exclusion list — keeps everything except the named fields (field order preserved), e.g. `dp select password,secret --exclude`.
 - `limit <max>`: Halts the stream after yielding `N` records.
 - `explode <field>`: Expands an array-valued field into one record per element. Records where the field isn't an array pass through unchanged.
 - `map <field> <expression>`: Computes a new field (or overwrites an existing one) using an expression.

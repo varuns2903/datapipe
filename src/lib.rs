@@ -32,7 +32,7 @@ fn command_into_stage(command: Command, strict: bool) -> miette::Result<Option<B
             })?;
             Box::new(FilterStage { ast })
         }
-        Command::Select { fields } => Box::new(SelectStage { fields }),
+        Command::Select { fields, exclude } => Box::new(SelectStage { fields, exclude }),
         Command::Limit { max } => Box::new(LimitStage { max }),
         Command::Sort { field, desc } => Box::new(SortStage { field, desc }),
         Command::Unique { field } => Box::new(UniqueStage { field }),

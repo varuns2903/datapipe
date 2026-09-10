@@ -44,6 +44,8 @@ pub enum StageSpec {
     },
     Select {
         fields: Vec<String>,
+        #[serde(default)]
+        exclude: bool,
     },
     Limit {
         max: usize,
@@ -120,7 +122,7 @@ pub fn parse(contents: &str) -> anyhow::Result<PipelineFile> {
 pub fn into_command(spec: StageSpec) -> Command {
     match spec {
         StageSpec::Filter { expression } => Command::Filter { expression },
-        StageSpec::Select { fields } => Command::Select { fields },
+        StageSpec::Select { fields, exclude } => Command::Select { fields, exclude },
         StageSpec::Limit { max } => Command::Limit { max },
         StageSpec::Sort { field, desc } => Command::Sort { field, desc },
         StageSpec::Unique { field } => Command::Unique { field },
@@ -310,5 +312,34 @@ mod tests {
             Command::Filter { expression } => assert_eq!(expression, ".a > 1"),
             _ => panic!("expected Command::Filter"),
         }
+    }
+
+    #[test]
+    fn select_exclude_defaults_to_false() {
+        let toml = r#"
+            [[stages]]
+            type = "select"
+            fields = ["a"]
+        "#;
+        let file = parse(toml).unwrap();
+        assert!(matches!(
+            file.stages[0],
+            StageSpec::Select { exclude: false, .. }
+        ));
+    }
+
+    #[test]
+    fn select_exclude_can_be_specified() {
+        let toml = r#"
+            [[stages]]
+            type = "select"
+            fields = ["password"]
+            exclude = true
+        "#;
+        let file = parse(toml).unwrap();
+        assert!(matches!(
+            file.stages[0],
+            StageSpec::Select { exclude: true, .. }
+        ));
     }
 }

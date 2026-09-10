@@ -19,20 +19,31 @@ impl Stage for FilterStage {
 
 pub struct SelectStage {
     pub fields: Vec<String>,
+    /// When true, `fields` is an exclusion list (keep everything except
+    /// these) instead of the default inclusion list.
+    pub exclude: bool,
 }
 
 impl Stage for SelectStage {
     fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
         let fields = self.fields.clone();
+        let exclude = self.exclude;
 
         let mapped = input.map(move |res| {
             res.map(|record| {
-                let mut new_record = indexmap::IndexMap::new();
-                for field in &fields {
-                    let val = record.get(field).cloned().unwrap_or(Value::Null);
-                    new_record.insert(field.clone(), val);
+                if exclude {
+                    record
+                        .into_iter()
+                        .filter(|(k, _)| !fields.contains(k))
+                        .collect()
+                } else {
+                    let mut new_record = indexmap::IndexMap::new();
+                    for field in &fields {
+                        let val = record.get(field).cloned().unwrap_or(Value::Null);
+                        new_record.insert(field.clone(), val);
+                    }
+                    new_record
                 }
-                new_record
             })
         });
         Box::new(mapped)
@@ -791,12 +802,61 @@ mod tests {
         ])]);
         let stage = SelectStage {
             fields: vec!["a".to_string(), "c".to_string()],
+            exclude: false,
         };
         let out = collect_ok(stage.process(input));
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].get("a"), Some(&Value::Integer(1)));
         assert_eq!(out[0].get("c"), Some(&Value::Null));
         assert_eq!(out[0].get("b"), None);
+    }
+
+    #[test]
+    fn select_exclude_drops_named_fields_keeps_rest() {
+        let input = stream(vec![rec(&[
+            ("name", Value::String("Alice".to_string())),
+            ("password", Value::String("secret".to_string())),
+            ("age", Value::Integer(30)),
+        ])]);
+        let stage = SelectStage {
+            fields: vec!["password".to_string()],
+            exclude: true,
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out[0].get("password"), None);
+        assert_eq!(
+            out[0].get("name"),
+            Some(&Value::String("Alice".to_string()))
+        );
+        assert_eq!(out[0].get("age"), Some(&Value::Integer(30)));
+    }
+
+    #[test]
+    fn select_exclude_preserves_field_order() {
+        let input = stream(vec![rec(&[
+            ("a", Value::Integer(1)),
+            ("b", Value::Integer(2)),
+            ("c", Value::Integer(3)),
+        ])]);
+        let stage = SelectStage {
+            fields: vec!["b".to_string()],
+            exclude: true,
+        };
+        let out = collect_ok(stage.process(input));
+        let keys: Vec<_> = out[0].keys().cloned().collect();
+        assert_eq!(keys, vec!["a".to_string(), "c".to_string()]);
+    }
+
+    #[test]
+    fn select_exclude_nonexistent_field_is_a_no_op() {
+        let input = stream(vec![rec(&[("a", Value::Integer(1))])]);
+        let stage = SelectStage {
+            fields: vec!["nonexistent".to_string()],
+            exclude: true,
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out[0].get("a"), Some(&Value::Integer(1)));
+        assert_eq!(out[0].len(), 1);
     }
 
     #[test]
