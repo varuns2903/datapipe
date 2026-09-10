@@ -119,6 +119,34 @@ impl Expr {
                     }
                     ("lower", [Value::String(s)]) => Value::String(s.to_lowercase()),
                     ("upper", [Value::String(s)]) => Value::String(s.to_uppercase()),
+                    // round/floor/ceil always produce a whole number, so
+                    // they return Integer even when given a Float -
+                    // unlike abs, which preserves the input's numeric type.
+                    ("round", [Value::Integer(i)]) => Value::Integer(*i),
+                    ("round", [Value::Float(f)]) => Value::Integer(f.round() as i64),
+                    ("floor", [Value::Integer(i)]) => Value::Integer(*i),
+                    ("floor", [Value::Float(f)]) => Value::Integer(f.floor() as i64),
+                    ("ceil", [Value::Integer(i)]) => Value::Integer(*i),
+                    ("ceil", [Value::Float(f)]) => Value::Integer(f.ceil() as i64),
+                    ("abs", [Value::Integer(i)]) => Value::Integer(i.abs()),
+                    ("abs", [Value::Float(f)]) => Value::Float(f.abs()),
+                    // least/greatest work on any value type (not just
+                    // numbers), via the same total ordering `sort`/`</`/`>`
+                    // already use - e.g. least("a", "b") == "a".
+                    ("least", [a, b]) => {
+                        if crate::model::cmp_values(a, b) == Ordering::Greater {
+                            b.clone()
+                        } else {
+                            a.clone()
+                        }
+                    }
+                    ("greatest", [a, b]) => {
+                        if crate::model::cmp_values(a, b) == Ordering::Less {
+                            b.clone()
+                        } else {
+                            a.clone()
+                        }
+                    }
                     // Right arity/known name (guaranteed by the parser) but a
                     // non-string operand at runtime, e.g. contains(.age, "x")
                     // where .age is an integer - null, consistent with how
@@ -647,8 +675,8 @@ impl Parser {
                 }
 
                 let expected_arity = match name.as_str() {
-                    "contains" | "starts_with" | "ends_with" => 2,
-                    "lower" | "upper" => 1,
+                    "contains" | "starts_with" | "ends_with" | "least" | "greatest" => 2,
+                    "lower" | "upper" | "round" | "floor" | "ceil" | "abs" => 1,
                     other => return Err(anyhow!("Unknown function '{}'", other)),
                 };
                 if args.len() != expected_arity {
@@ -1399,6 +1427,104 @@ mod tests {
     fn parse_rejects_matches_wrong_arity() {
         assert!(parse(r#"matches(.a)"#).is_err());
         assert!(parse(r#"matches(.a, "x", "y")"#).is_err());
+    }
+
+    // --- numeric functions ---
+
+    #[test]
+    fn eval_round_produces_integer_from_float() {
+        let rec = record_with(&[]);
+        assert_eq!(
+            parse("round(4.5)").unwrap().evaluate(&rec),
+            Value::Integer(5)
+        );
+        assert_eq!(
+            parse("round(4.4)").unwrap().evaluate(&rec),
+            Value::Integer(4)
+        );
+    }
+
+    #[test]
+    fn eval_round_floor_ceil_are_no_ops_on_integers() {
+        let rec = record_with(&[]);
+        assert_eq!(parse("round(5)").unwrap().evaluate(&rec), Value::Integer(5));
+        assert_eq!(parse("floor(5)").unwrap().evaluate(&rec), Value::Integer(5));
+        assert_eq!(parse("ceil(5)").unwrap().evaluate(&rec), Value::Integer(5));
+    }
+
+    #[test]
+    fn eval_floor_and_ceil() {
+        let rec = record_with(&[]);
+        assert_eq!(
+            parse("floor(4.9)").unwrap().evaluate(&rec),
+            Value::Integer(4)
+        );
+        assert_eq!(
+            parse("ceil(4.1)").unwrap().evaluate(&rec),
+            Value::Integer(5)
+        );
+    }
+
+    #[test]
+    fn eval_abs_preserves_numeric_type() {
+        // No unary minus support (a pre-existing, documented limitation -
+        // only subtraction between two operands), so produce a negative
+        // value via subtraction rather than a `-5` literal.
+        let rec = record_with(&[]);
+        assert_eq!(
+            parse("abs(0 - 5)").unwrap().evaluate(&rec),
+            Value::Integer(5)
+        );
+        assert_eq!(
+            parse("abs(0.0 - 5.5)").unwrap().evaluate(&rec),
+            Value::Float(5.5)
+        );
+    }
+
+    #[test]
+    fn eval_least_and_greatest_with_numbers() {
+        let rec = record_with(&[("a", Value::Integer(3)), ("b", Value::Integer(7))]);
+        assert_eq!(
+            parse("least(.a, .b)").unwrap().evaluate(&rec),
+            Value::Integer(3)
+        );
+        assert_eq!(
+            parse("greatest(.a, .b)").unwrap().evaluate(&rec),
+            Value::Integer(7)
+        );
+    }
+
+    #[test]
+    fn eval_least_works_on_any_value_type_via_total_ordering() {
+        let rec = record_with(&[
+            ("a", Value::String("banana".to_string())),
+            ("b", Value::String("apple".to_string())),
+        ]);
+        assert_eq!(
+            parse("least(.a, .b)").unwrap().evaluate(&rec),
+            Value::String("apple".to_string())
+        );
+    }
+
+    #[test]
+    fn eval_numeric_function_on_non_numeric_is_null() {
+        let rec = record_with(&[("x", Value::String("hi".to_string()))]);
+        assert_eq!(parse("round(.x)").unwrap().evaluate(&rec), Value::Null);
+    }
+
+    #[test]
+    fn eval_round_usable_in_filter_comparison() {
+        let rec = record_with(&[("price", Value::Float(19.6))]);
+        assert_eq!(
+            parse("round(.price) >= 10").unwrap().evaluate(&rec),
+            Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn parse_rejects_numeric_function_wrong_arity() {
+        assert!(parse("round(.a, .b)").is_err());
+        assert!(parse("least(.a)").is_err());
     }
 
     #[test]

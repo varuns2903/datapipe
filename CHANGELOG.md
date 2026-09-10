@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Numeric functions in `filter`/`map` expressions: `round(a)`, `floor(a)`,
+  `ceil(a)` (all return an integer), `abs(a)` (preserves numeric type),
+  and `least(a, b)` / `greatest(a, b)` (SQL-style naming, chosen to avoid
+  confusion with the existing `min`/`max` *subcommands* - a different
+  namespace, but easy to conflate). `least`/`greatest` work on any value
+  type via the same total ordering `sort` already uses, not just numbers.
+  Found and worked around a pre-existing, already-documented limitation
+  while writing tests: there's no unary minus, so `abs(-5)` doesn't parse
+  - use `abs(0 - 5)`.
 - `freq <field> [--limit <n>]` command: counts occurrences of each distinct
   value in a field, sorted most-frequent first, with each value's
   percentage of the stream (`xsv frequency`'s equivalent). Unlike
