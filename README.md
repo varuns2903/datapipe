@@ -8,7 +8,7 @@ Instead of operating on raw text strings, `dp` operates on structured records na
 
 ## Features
 - **Streaming by Default:** Transformation stages (`filter`, `select`, `limit`, `explode`, `map`) and simple single-value aggregations (`count`, `sum`, `avg`, `min`, `max`) process data lazily with O(1) memory, independent of input size. `sort` is memory-bounded too, via an external merge sort that spills to temp files rather than buffering the whole stream. **`unique`, `group`, `schema`, and `join` are the exception**: they hold state proportional to the number of *distinct* keys (or, for `schema`, up to the first 10,000 records; for `join`, the entire right-hand file) rather than the main stream's length — fine for typical cardinality and typical lookup-table sizes, but not O(1) if you `unique`/`group` a field with an enormous number of distinct values, or `join` against a huge file (e.g. a UUID column over billions of rows, or a multi-GB join file).
-- **Unified Data Model:** Seamlessly pipe data between formats (`JSONL -> CSV` or `CSV -> JSONL`).
+- **Unified Data Model:** Seamlessly pipe data between formats (JSONL, CSV, and TSV, in any direction).
 - **Custom Expression Engine:** A handwritten, recursive descent parser allows for powerful conditional filtering (`.age > 25 && .admin == true`).
 - **Stateful Aggregations:** Easily compute statistics (`sum`, `avg`, `min`, `max`, `count`) directly in the shell.
 - **High Performance:** Capable of processing hundreds of thousands of records per second on a single thread.
@@ -125,9 +125,11 @@ Run `dp <command> --help` for full details on any command below.
 - `schema`: Inspects (up to the first 10,000 records of) the stream and infers the data types of all fields, e.g. `"integer | null"` if a field is sometimes explicitly `null`. A field that's simply absent from a record isn't counted for that record.
 - `stats`: Computes `count`/`nulls`/`distinct`/`min`/`max`/`mean`/`stddev` for every field in a single pass, yielding one summary record per field (pipe into `dp table` for a readable view). `mean`/`stddev` are `null` for non-numeric fields. Memory usage for `distinct` is proportional to the number of *distinct* values per field, same tradeoff as `unique`/`group`.
 - `csv`: Outputs the resulting stream as a CSV instead of JSONL. Array/object fields are rendered as `[complex]`.
+- `tsv`: Outputs the resulting stream as TSV (tab-separated) instead of JSONL. Array/object fields are rendered as `[complex]`.
 - `table`: Outputs an aligned, human-readable table (header row, dashed separator, then data rows) instead of JSONL — like `column -t`. Unlike the other output commands, this buffers the entire stream first, since column widths depend on every value seen. Missing fields render blank; array/object fields render as `[complex]`.
 - **Input is transparently gzip-decompressed when detected**: if stdin's first two bytes are the gzip magic number, `dp` decompresses on the fly before parsing - so `cat data.jsonl.gz | dp count` and `cat data.csv.gz | dp --in-csv count` both work without an explicit flag (detection, not a filename check, since stdin has no name). `join <file>` decompresses `.gz`-suffixed files the same way (see `join` below).
 - `--in-csv`: A global flag to read the input as CSV instead of JSONL. CSV values are inferred as integer, float, boolean, or string. Integers are only inferred when they round-trip exactly (e.g. `"25"` → `25`), so values like zip codes or phone numbers with a leading zero (`"00501"`) are correctly kept as strings rather than silently losing that leading zero. Floats are similarly guarded: a field that's literally the text `"NaN"`, `"inf"`, or `"Infinity"` is kept as a string rather than parsed into a non-finite float, since JSON has no representation for either and would silently render it as `null`.
+- `--in-tsv`: A global flag to read the input as TSV (tab-separated) instead of JSONL, using the same type inference as `--in-csv`.
 - `--strict`: A global flag that aborts the whole pipeline on the first malformed record instead of the default behavior (skip it with a warning and continue). See [Error behavior](#error-behavior).
 - `--pretty` / `-p`: A global flag that indents JSON output for human reading, instead of the default compact one-object-per-line format. Each pretty-printed object may span multiple lines, so this output is **not** valid JSONL — don't pipe it into another `dp` command. Ignored for `csv` output.
 
@@ -143,9 +145,11 @@ For a pipeline with many stages, `dp run pipeline.toml` runs them all in a singl
 ```toml
 # pipeline.toml
 strict = false     # optional, defaults to false; combines with --strict (either being true is enough)
-out_csv = false    # optional, defaults to false - output JSONL or CSV
+out_csv = false    # optional, defaults to false - output JSONL, CSV, or TSV
+out_tsv = false    # optional, defaults to false - output as TSV instead
 out_table = false  # optional, defaults to false - output as an aligned table
-in_csv = false     # optional, defaults to false - read input as JSONL or CSV
+in_csv = false     # optional, defaults to false - read input as JSONL, CSV, or TSV
+in_tsv = false     # optional, defaults to false - read input as TSV instead
 pretty = false     # optional, defaults to false; combines with --pretty (either being true is enough)
 
 [[stages]]
@@ -165,7 +169,7 @@ fields = ["name", "age"]
 cat users.jsonl | dp run pipeline.toml
 ```
 
-Each `[[stages]]` table's `type` corresponds to a subcommand (`filter`, `search`, `select`, `sort`, `topn`, `unique`, `dedup`, `count`, `sum`, `avg`, `min`, `max`, `schema`, `stats`, `group`, `freq`, `explode`, `rename`, `flatten`, `sample`, `map`, `join`) with the same field names as that subcommand's flags/arguments — e.g. `sort`/`topn`/`unique` take a comma-separated `fields` string (`sort`/`topn` fields may carry a `:desc`/`:asc` suffix, e.g. `"age:desc"`; `topn` also takes `n`), `group`/`join` take a comma-separated `by`/`on` string, and `join` also takes `file` and an optional `join_type` (`"left"` | `"inner"` | `"right"` | `"full"`, defaults to `"left"`). Format/utility commands (`csv`, `table`, `completions`, `man`, `run` itself) aren't valid `[[stages]]` entries — use the top-level `out_csv`/`out_table` settings for those output formats instead.
+Each `[[stages]]` table's `type` corresponds to a subcommand (`filter`, `search`, `select`, `sort`, `topn`, `unique`, `dedup`, `count`, `sum`, `avg`, `min`, `max`, `schema`, `stats`, `group`, `freq`, `explode`, `rename`, `flatten`, `sample`, `map`, `join`) with the same field names as that subcommand's flags/arguments — e.g. `sort`/`topn`/`unique` take a comma-separated `fields` string (`sort`/`topn` fields may carry a `:desc`/`:asc` suffix, e.g. `"age:desc"`; `topn` also takes `n`), `group`/`join` take a comma-separated `by`/`on` string, and `join` also takes `file` and an optional `join_type` (`"left"` | `"inner"` | `"right"` | `"full"`, defaults to `"left"`). Format/utility commands (`csv`, `tsv`, `table`, `completions`, `man`, `run` itself) aren't valid `[[stages]]` entries — use the top-level `out_csv`/`out_tsv`/`out_table` settings for those output formats instead.
 
 ## Expressions
 

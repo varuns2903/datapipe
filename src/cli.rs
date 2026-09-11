@@ -6,8 +6,12 @@ use clap_complete::Shell;
 #[command(name = "dp", author, version, about, long_about = None)]
 pub struct Cli {
     /// Read the input as CSV instead of JSONL
-    #[arg(long, global = true)]
+    #[arg(long, global = true, conflicts_with = "in_tsv")]
     pub in_csv: bool,
+
+    /// Read the input as TSV (tab-separated) instead of JSONL
+    #[arg(long, global = true)]
+    pub in_tsv: bool,
 
     /// Abort on the first malformed record instead of skipping it with a warning
     #[arg(long, global = true)]
@@ -83,6 +87,8 @@ pub enum Command {
     Inspect,
     /// Output the stream as CSV instead of JSONL
     Csv,
+    /// Output the stream as TSV (tab-separated) instead of JSONL
+    Tsv,
     /// Output the stream as an aligned, human-readable table (buffers the
     /// whole stream to compute column widths)
     Table,

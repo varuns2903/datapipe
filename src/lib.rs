@@ -145,7 +145,7 @@ fn command_into_stage(command: Command, strict: bool) -> miette::Result<Option<B
             };
             let join_records: crate::pipeline::RecordStream<'static> = if is_csv {
                 Box::new(
-                    crate::io::read_csv_stream(reader)
+                    crate::io::read_csv_stream(reader, crate::io::CSV_DELIMITER)
                         .map_err(|e| miette::miette!(e.to_string()))?,
                 )
             } else {
@@ -184,7 +184,7 @@ fn command_into_stage(command: Command, strict: bool) -> miette::Result<Option<B
                 })
             }
         }
-        Command::Inspect | Command::Csv | Command::Table => return Ok(None),
+        Command::Inspect | Command::Csv | Command::Tsv | Command::Table => return Ok(None),
         Command::Completions { .. } | Command::Man | Command::Run { .. } => {
             unreachable!("handled before pipeline setup")
         }
@@ -234,17 +234,28 @@ fn maybe_decompress_stdin(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InputFormat {
+    Json,
+    Csv,
+    Tsv,
+}
+
 fn read_input(
-    in_csv: bool,
+    format: InputFormat,
     reader: BufReader<std::io::StdinLock>,
 ) -> miette::Result<crate::pipeline::RecordStream> {
     let reader = maybe_decompress_stdin(reader);
-    if in_csv {
-        Ok(Box::new(
-            crate::io::read_csv_stream(reader).map_err(|e| miette::miette!(e.to_string()))?,
-        ))
-    } else {
-        Ok(Box::new(crate::io::read_json_stream(reader)))
+    match format {
+        InputFormat::Csv => Ok(Box::new(
+            crate::io::read_csv_stream(reader, crate::io::CSV_DELIMITER)
+                .map_err(|e| miette::miette!(e.to_string()))?,
+        )),
+        InputFormat::Tsv => Ok(Box::new(
+            crate::io::read_csv_stream(reader, crate::io::TSV_DELIMITER)
+                .map_err(|e| miette::miette!(e.to_string()))?,
+        )),
+        InputFormat::Json => Ok(Box::new(crate::io::read_json_stream(reader))),
     }
 }
 
@@ -252,6 +263,7 @@ fn read_input(
 enum OutputFormat {
     Json,
     Csv,
+    Tsv,
     Table,
 }
 
@@ -262,8 +274,14 @@ fn write_output(
     result_stream: crate::pipeline::RecordStream,
 ) -> miette::Result<()> {
     match format {
-        OutputFormat::Csv => crate::io::write_csv_stream(writer, result_stream)
-            .map_err(|e| miette::miette!(e.to_string())),
+        OutputFormat::Csv => {
+            crate::io::write_csv_stream(writer, result_stream, crate::io::CSV_DELIMITER)
+                .map_err(|e| miette::miette!(e.to_string()))
+        }
+        OutputFormat::Tsv => {
+            crate::io::write_csv_stream(writer, result_stream, crate::io::TSV_DELIMITER)
+                .map_err(|e| miette::miette!(e.to_string()))
+        }
         OutputFormat::Table => crate::io::write_table_stream(writer, result_stream)
             .map_err(|e| miette::miette!(e.to_string())),
         OutputFormat::Json => crate::io::write_json_stream(writer, result_stream, pretty)
@@ -313,7 +331,14 @@ pub fn run_cli() -> miette::Result<()> {
         let stdout_handle = stdout();
         let writer = BufWriter::new(stdout_handle.lock());
 
-        let records = read_input(spec.in_csv, reader)?;
+        let in_format = if spec.in_tsv {
+            InputFormat::Tsv
+        } else if spec.in_csv {
+            InputFormat::Csv
+        } else {
+            InputFormat::Json
+        };
+        let records = read_input(in_format, reader)?;
         // A pipeline file's `strict` setting combines with the global CLI
         // flag - either one asking for strict mode is enough, matching the
         // intuition that --strict on the command line should never be
@@ -333,6 +358,8 @@ pub fn run_cli() -> miette::Result<()> {
         let pretty = spec.pretty || cli.pretty;
         let format = if spec.out_table {
             OutputFormat::Table
+        } else if spec.out_tsv {
+            OutputFormat::Tsv
         } else if spec.out_csv {
             OutputFormat::Csv
         } else {
@@ -346,12 +373,20 @@ pub fn run_cli() -> miette::Result<()> {
     let stdout_handle = stdout();
     let writer = BufWriter::new(stdout_handle.lock());
 
-    let records = read_input(cli.in_csv, reader)?;
+    let in_format = if cli.in_tsv {
+        InputFormat::Tsv
+    } else if cli.in_csv {
+        InputFormat::Csv
+    } else {
+        InputFormat::Json
+    };
+    let records = read_input(in_format, reader)?;
     let records = apply_strict_policy(records, cli.strict);
 
     let mut pipeline = Pipeline::new();
     let format = match cli.command {
         Command::Csv => OutputFormat::Csv,
+        Command::Tsv => OutputFormat::Tsv,
         Command::Table => OutputFormat::Table,
         _ => OutputFormat::Json,
     };

@@ -24,9 +24,13 @@ pub struct PipelineFile {
     #[serde(default)]
     pub in_csv: bool,
     #[serde(default)]
+    pub in_tsv: bool,
+    #[serde(default)]
     pub strict: bool,
     #[serde(default)]
     pub out_csv: bool,
+    #[serde(default)]
+    pub out_tsv: bool,
     #[serde(default)]
     pub out_table: bool,
     #[serde(default)]
@@ -220,6 +224,25 @@ mod tests {
         assert!(file.out_csv);
         assert!(file.pretty);
         assert_eq!(file.stages.len(), 0);
+    }
+
+    #[test]
+    fn in_tsv_and_out_tsv_default_to_false_and_can_be_set() {
+        let toml = r#"
+            stages = []
+        "#;
+        let file = parse(toml).unwrap();
+        assert!(!file.in_tsv);
+        assert!(!file.out_tsv);
+
+        let toml = r#"
+            in_tsv = true
+            out_tsv = true
+            stages = []
+        "#;
+        let file = parse(toml).unwrap();
+        assert!(file.in_tsv);
+        assert!(file.out_tsv);
     }
 
     #[test]

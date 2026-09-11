@@ -2,6 +2,9 @@ use crate::model::{Record, Value};
 use anyhow::Result;
 use std::io::{BufRead, Write};
 
+pub const CSV_DELIMITER: u8 = b',';
+pub const TSV_DELIMITER: u8 = b'\t';
+
 // JSON In
 //
 // Parses one JSON object per line (true JSONL semantics) rather than treating
@@ -46,12 +49,19 @@ pub fn write_json_stream<W: Write>(
     Ok(())
 }
 
-// CSV In
+// CSV/TSV In
+//
+// Takes an explicit delimiter rather than being two near-duplicate
+// functions, since CSV and TSV differ only in that one byte - every other
+// concern (type inference, header handling, quoting) is identical and the
+// underlying `csv` crate already supports an arbitrary delimiter.
 pub fn read_csv_stream<'a, R: BufRead + 'a>(
     reader: R,
+    delimiter: u8,
 ) -> Result<impl Iterator<Item = Result<Record>> + 'a> {
     let mut csv_reader = csv::ReaderBuilder::new()
         .has_headers(true)
+        .delimiter(delimiter)
         .from_reader(reader);
 
     let headers = csv_reader.headers()?.clone();
@@ -112,12 +122,15 @@ pub fn read_csv_stream<'a, R: BufRead + 'a>(
     Ok(iter)
 }
 
-// CSV Out
+// CSV/TSV Out
 pub fn write_csv_stream<W: Write>(
     writer: W,
     mut records: impl Iterator<Item = Result<Record>>,
+    delimiter: u8,
 ) -> Result<()> {
-    let mut csv_writer = csv::Writer::from_writer(writer);
+    let mut csv_writer = csv::WriterBuilder::new()
+        .delimiter(delimiter)
+        .from_writer(writer);
 
     // We need to fetch the first record to write the headers.
     // If the stream is empty, we do nothing.
@@ -286,7 +299,7 @@ mod tests {
     }
 
     fn read_csv_all(input: &str) -> Vec<Record> {
-        read_csv_stream(Cursor::new(input.as_bytes()))
+        read_csv_stream(Cursor::new(input.as_bytes()), CSV_DELIMITER)
             .unwrap()
             .map(|r| r.unwrap())
             .collect()
@@ -338,6 +351,30 @@ mod tests {
         let records = read_csv_all("active,note\ntrue,\n");
         assert_eq!(records[0].get("active"), Some(&Value::Boolean(true)));
         assert_eq!(records[0].get("note"), Some(&Value::Null));
+    }
+
+    #[test]
+    fn tsv_reads_tab_separated_input_with_same_type_inference() {
+        let records: Vec<Record> =
+            read_csv_stream(Cursor::new("a\tb\n1\tAlice\n".as_bytes()), TSV_DELIMITER)
+                .unwrap()
+                .map(|r| r.unwrap())
+                .collect();
+        assert_eq!(records[0].get("a"), Some(&Value::Integer(1)));
+        assert_eq!(
+            records[0].get("b"),
+            Some(&Value::String("Alice".to_string()))
+        );
+    }
+
+    #[test]
+    fn tsv_write_uses_tab_delimiter() {
+        let mut rec = Record::new();
+        rec.insert("a".to_string(), Value::Integer(1));
+        rec.insert("b".to_string(), Value::Integer(2));
+        let mut out = Vec::new();
+        write_csv_stream(&mut out, vec![Ok(rec)].into_iter(), TSV_DELIMITER).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "a\tb\n1\t2\n");
     }
 
     #[test]

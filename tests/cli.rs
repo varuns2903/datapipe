@@ -164,6 +164,73 @@ fn gzip_bytes(data: &[u8]) -> Vec<u8> {
 }
 
 #[test]
+fn test_in_tsv_reads_tab_separated_input() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("--in-tsv")
+        .arg("filter")
+        .arg("true")
+        .write_stdin("a\tb\n1\t2\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"a\":1,\"b\":2"));
+}
+
+#[test]
+fn test_tsv_output_command_uses_tab_delimiter() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    let output = cmd
+        .arg("tsv")
+        .write_stdin("{\"a\":1,\"b\":2}\n")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(String::from_utf8(output).unwrap(), "a\tb\n1\t2\n");
+}
+
+#[test]
+fn test_in_csv_and_in_tsv_conflict() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("--in-csv")
+        .arg("--in-tsv")
+        .arg("count")
+        .write_stdin("a,b\n1,2\n")
+        .assert()
+        .failure();
+}
+
+#[test]
+fn test_run_pipeline_file_with_tsv_in_and_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let pipeline_path = dir.path().join("pipeline.toml");
+    std::fs::write(
+        &pipeline_path,
+        r#"
+in_tsv = true
+out_tsv = true
+
+[[stages]]
+type = "filter"
+expression = ".a > 1"
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    let output = cmd
+        .arg("run")
+        .arg(pipeline_path.to_str().unwrap())
+        .write_stdin("a\tb\n1\t2\n3\t4\n")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(String::from_utf8(output).unwrap(), "a\tb\n3\t4\n");
+}
+
+#[test]
 fn test_stdin_gzip_is_auto_detected_for_jsonl() {
     let mut cmd = Command::cargo_bin("dp").unwrap();
     cmd.arg("count")

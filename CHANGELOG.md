@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- TSV support, mirroring CSV: `--in-tsv` (global flag, conflicts with
+  `--in-csv`) reads tab-separated input, and the `tsv` subcommand outputs
+  tab-separated data, both with the exact same type inference as CSV
+  (leading-zero and NaN/inf guards included, since it's the same code
+  path). Pipeline files gained matching `in_tsv`/`out_tsv` boolean
+  settings. `read_csv_stream`/`write_csv_stream` now take an explicit
+  `delimiter: u8` parameter (`io::CSV_DELIMITER`/`io::TSV_DELIMITER`)
+  rather than being two near-duplicate functions, since CSV and TSV
+  differ only in that one byte and the underlying `csv` crate already
+  supports an arbitrary delimiter. `read_input`/`write_output` now
+  dispatch on a 3-way `InputFormat`/`OutputFormat` enum instead of a
+  `bool`. Verified: `io` unit tests for TSV read/write, CLI integration
+  tests for `--in-tsv`, the `tsv` command, the `--in-csv`/`--in-tsv`
+  conflict, and a `run` pipeline file using `in_tsv`/`out_tsv`.
 - Main stdin input is now transparently gzip-decompressed when detected,
   for both the direct CLI (`cat data.jsonl.gz | dp count`) and `run`
   (`cat data.jsonl.gz | dp run pipeline.toml`), in both JSONL and
