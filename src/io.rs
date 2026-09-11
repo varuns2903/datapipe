@@ -80,7 +80,19 @@ pub fn read_csv_stream<'a, R: BufRead + 'a>(
                     Value::String(field.to_string())
                 }
             } else if let Ok(f) = field.parse::<f64>() {
-                Value::Float(f)
+                // Rust's f64::from_str accepts "nan"/"inf"/"infinity"
+                // (case-insensitively, with an optional sign) as valid
+                // floats, but JSON has no representation for either - a
+                // CSV field that's genuinely the text "NaN" or "inf" (a
+                // country/currency/status code, say) would otherwise be
+                // silently corrupted into JSON `null` on output. Only
+                // treat it as numeric when it's finite; non-finite parses
+                // fall through and are kept as the original string.
+                if f.is_finite() {
+                    Value::Float(f)
+                } else {
+                    Value::String(field.to_string())
+                }
             } else if field.eq_ignore_ascii_case("true") {
                 Value::Boolean(true)
             } else if field.eq_ignore_ascii_case("false") {
@@ -326,6 +338,32 @@ mod tests {
         let records = read_csv_all("active,note\ntrue,\n");
         assert_eq!(records[0].get("active"), Some(&Value::Boolean(true)));
         assert_eq!(records[0].get("note"), Some(&Value::Null));
+    }
+
+    #[test]
+    fn csv_preserves_nan_and_infinity_literals_as_strings() {
+        // Rust's f64::from_str accepts "nan"/"inf"/"infinity" as valid
+        // floats, but JSON has no representation for either - without a
+        // finiteness check, a CSV field that's genuinely the text "NaN"
+        // or "inf" would be silently corrupted into JSON `null` on
+        // output (serde_json serializes non-finite floats as null).
+        let records = read_csv_all("a,b,c,d\nNaN,inf,Infinity,-inf\n");
+        assert_eq!(records[0].get("a"), Some(&Value::String("NaN".to_string())));
+        assert_eq!(records[0].get("b"), Some(&Value::String("inf".to_string())));
+        assert_eq!(
+            records[0].get("c"),
+            Some(&Value::String("Infinity".to_string()))
+        );
+        assert_eq!(
+            records[0].get("d"),
+            Some(&Value::String("-inf".to_string()))
+        );
+    }
+
+    #[test]
+    fn csv_still_infers_negative_finite_float() {
+        let records = read_csv_all("n\n-3.5\n");
+        assert_eq!(records[0].get("n"), Some(&Value::Float(-3.5)));
     }
 
     #[test]

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `--in-csv` no longer corrupts a field whose value is literally the text
+  `"NaN"`, `"inf"`, `"Infinity"`, or `"-inf"` (any case). Rust's
+  `f64::from_str` accepts these as valid floats, but JSON has no
+  representation for non-finite numbers, so such a field was silently
+  parsed to a non-finite float and then serialized as JSON `null` on
+  output - a real value quietly turning into `null` with no warning.
+  Numeric inference now checks `f64::is_finite()` before accepting a
+  float parse; a non-finite parse falls through and the field is kept as
+  its original string, consistent with the existing leading-zero-integer
+  guard (`"00501"` staying a string rather than becoming `501`). Legit
+  finite numbers, including negative floats, are unaffected. Verified
+  with new `io` unit tests and a CLI integration test.
+
 ### Documentation
 - Documented that `group`/`freq`'s output already composes with `filter`
   for a SQL-style `HAVING` clause (e.g. `dp group category --count | dp

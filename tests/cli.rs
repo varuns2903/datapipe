@@ -158,6 +158,18 @@ fn test_topn_zero_yields_nothing() {
 }
 
 #[test]
+fn test_csv_input_preserves_nan_literal_as_string() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("--in-csv")
+        .arg("filter")
+        .arg("true")
+        .write_stdin("name,code\nAlice,NaN\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"code\":\"NaN\""));
+}
+
+#[test]
 fn test_sort_multi_field() {
     let mut cmd = Command::cargo_bin("dp").unwrap();
     cmd.arg("sort")
