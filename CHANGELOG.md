@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+- Documented that `group`/`freq`'s output already composes with `filter`
+  for a SQL-style `HAVING` clause (e.g. `dp group category --count | dp
+  filter '.count > 10'`) - no code change was needed, this already worked
+  since `group`'s output is just another JSONL stream, but it wasn't
+  spelled out anywhere and is a natural thing to reach for.
+
 ### Added
 - `topn <fields> <n>`: keeps only the top `n` records by a `sort`-style
   field spec (same syntax, e.g. `score:desc`), without buffering or
