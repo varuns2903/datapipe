@@ -163,6 +163,54 @@ fn gzip_bytes(data: &[u8]) -> Vec<u8> {
     encoder.finish().unwrap()
 }
 
+fn zstd_bytes(data: &[u8]) -> Vec<u8> {
+    ruzstd::encoding::compress_to_vec(data, ruzstd::encoding::CompressionLevel::Fastest)
+}
+
+#[test]
+fn test_stdin_zstd_is_auto_detected_for_jsonl() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("count")
+        .write_stdin(zstd_bytes(b"{\"a\":1}\n{\"a\":2}\n{\"a\":3}\n"))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"count\":3"));
+}
+
+#[test]
+fn test_stdin_zstd_is_auto_detected_for_csv() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("--in-csv")
+        .arg("filter")
+        .arg("true")
+        .write_stdin(zstd_bytes(b"a,b\n1,2\n"))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"a\":1,\"b\":2"));
+}
+
+#[test]
+fn test_join_transparently_decompresses_zst_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let right_path = dir.path().join("right.jsonl.zst");
+    std::fs::write(
+        &right_path,
+        zstd_bytes(b"{\"id\":1,\"name\":\"Alice\"}\n{\"id\":2,\"name\":\"Bob\"}\n"),
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("join")
+        .arg(right_path.to_str().unwrap())
+        .arg("--on")
+        .arg("id")
+        .write_stdin("{\"id\":1,\"order\":100}\n{\"id\":2,\"order\":200}\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Alice"))
+        .stdout(predicate::str::contains("Bob"));
+}
+
 #[test]
 fn test_json_array_input_is_auto_detected() {
     let mut cmd = Command::cargo_bin("dp").unwrap();

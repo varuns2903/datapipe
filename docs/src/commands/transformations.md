@@ -18,7 +18,7 @@ These stages process the stream lazily, one record at a time, with O(1) memory.
 join <file> --on <fields> [--type <left|inner|right|full>] [--merge]
 ```
 
-Joins each record with a matching record from `<file>` (JSONL or CSV, transparently gzip-decompressed if `<file>` ends in `.gz`, e.g. `sales.csv.gz`) on the given field(s). Defaults to `left`.
+Joins each record with a matching record from `<file>` (JSONL or CSV, transparently decompressed if `<file>` ends in `.gz` or `.zst`, e.g. `sales.csv.gz`) on the given field(s). Defaults to `left`.
 
 `--on` accepts one or more comma-separated fields, e.g. `--on region,id`, forming a composite key — a record only matches when *all* of the fields agree, not just one.
 
@@ -41,4 +41,5 @@ By default, `join` loads `<file>` entirely into memory as a hash table before th
 ```bash
 dp join huge_lookup.jsonl --on id --merge
 dp join huge_lookup.jsonl.gz --on id --merge
+dp join huge_lookup.jsonl.zst --on id --merge
 ```

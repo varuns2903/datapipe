@@ -27,6 +27,7 @@ regex = "1.13.1"
 toml = "1.1.5"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 flate2 = "1.1.10"
+ruzstd = "0.9.0"
 
 [dev-dependencies]
 assert_cmd = "2.0"

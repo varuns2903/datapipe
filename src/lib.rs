@@ -126,22 +126,31 @@ fn command_into_stage(command: Command, strict: bool) -> miette::Result<Option<B
                 .map_err(|e| miette::miette!("Failed to open join file: {}", e))?;
             // A join file this large is exactly the case --merge exists
             // for, and exactly the case worth shipping compressed - so
-            // `.gz` is decompressed transparently rather than requiring
-            // the caller to pre-decompress to a temp file. `.csv`/JSONL
-            // detection looks at the name with a trailing `.gz` stripped,
-            // so `sales.csv.gz` is still recognized as CSV.
-            let is_gz = file.ends_with(".gz");
-            let base_name = file.strip_suffix(".gz").unwrap_or(&file);
+            // `.gz`/`.zst` are decompressed transparently rather than
+            // requiring the caller to pre-decompress to a temp file.
+            // `.csv`/JSONL detection looks at the name with a trailing
+            // compression suffix stripped, so `sales.csv.gz` is still
+            // recognized as CSV.
+            let (base_name, compression) = if let Some(stripped) = file.strip_suffix(".gz") {
+                (stripped, Some("gz"))
+            } else if let Some(stripped) = file.strip_suffix(".zst") {
+                (stripped, Some("zst"))
+            } else {
+                (file.as_str(), None)
+            };
             let is_csv = base_name.ends_with(".csv");
             // 'static: every branch here is fully owned (no borrows), so
             // this stream doesn't need to be tied to this function's
             // lifetime - needed for the --merge path below, which stores
             // the pre-sorted right-hand stream inside MergeJoinStage across
             // the whole pipeline's execution, not just this construction step.
-            let reader: Box<dyn std::io::BufRead> = if is_gz {
-                Box::new(BufReader::new(flate2::read::MultiGzDecoder::new(f)))
-            } else {
-                Box::new(BufReader::new(f))
+            let reader: Box<dyn std::io::BufRead> = match compression {
+                Some("gz") => Box::new(BufReader::new(flate2::read::MultiGzDecoder::new(f))),
+                Some("zst") => Box::new(BufReader::new(
+                    ruzstd::decoding::StreamingDecoder::new(f)
+                        .map_err(|e| miette::miette!("Invalid zstd join file: {e}"))?,
+                )),
+                _ => Box::new(BufReader::new(f)),
             };
             let join_records: crate::pipeline::RecordStream<'static> = if is_csv {
                 Box::new(
@@ -218,19 +227,36 @@ fn apply_strict_policy(
 /// control character), so detection is unambiguous.
 const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 
-/// Peeks at stdin's first two bytes (without consuming them - `fill_buf`
-/// only fills the internal buffer) and transparently gzip-decompresses
-/// the stream if they match the gzip magic number. Shared by both direct
-/// CLI dispatch and `run`, so `cat data.jsonl.gz | dp count` and
-/// `cat data.jsonl.gz | dp run pipeline.toml` both just work.
+/// Zstandard frame magic number (little-endian 0xFD2FB528), equally
+/// unambiguous against JSON/CSV/TSV's first byte.
+const ZSTD_MAGIC: [u8; 4] = [0x28, 0xb5, 0x2f, 0xfd];
+
+/// Peeks at stdin's first few bytes (without consuming them - `fill_buf`
+/// only fills the internal buffer) and transparently decompresses the
+/// stream if they match the gzip or zstd magic number. Shared by both
+/// direct CLI dispatch and `run`, so `cat data.jsonl.gz | dp count` and
+/// `cat data.jsonl.zst | dp run pipeline.toml` both just work.
 fn maybe_decompress_stdin(
     mut reader: BufReader<std::io::StdinLock>,
-) -> Box<dyn std::io::BufRead + '_> {
-    let looks_gzipped = matches!(reader.fill_buf(), Ok(buf) if buf.starts_with(&GZIP_MAGIC));
-    if looks_gzipped {
-        Box::new(BufReader::new(flate2::bufread::MultiGzDecoder::new(reader)))
+) -> miette::Result<Box<dyn std::io::BufRead + '_>> {
+    let peeked = reader
+        .fill_buf()
+        .map_err(|e| miette::miette!("Failed to read stdin: {e}"))?;
+    if peeked.starts_with(&GZIP_MAGIC) {
+        Ok(Box::new(BufReader::new(
+            flate2::bufread::MultiGzDecoder::new(reader),
+        )))
+    } else if peeked.starts_with(&ZSTD_MAGIC) {
+        // Unlike gzip's decoder, ruzstd's StreamingDecoder::new eagerly
+        // reads and validates the frame header during construction, so a
+        // corrupt zstd stream fails right here rather than lazily on
+        // first read - hence the Result return type this function has
+        // (gzip's decoder never fails at construction time).
+        let decoder = ruzstd::decoding::StreamingDecoder::new(reader)
+            .map_err(|e| miette::miette!("Invalid zstd stream: {e}"))?;
+        Ok(Box::new(BufReader::new(decoder)))
     } else {
-        Box::new(reader)
+        Ok(Box::new(reader))
     }
 }
 
@@ -245,7 +271,7 @@ fn read_input(
     format: InputFormat,
     reader: BufReader<std::io::StdinLock>,
 ) -> miette::Result<crate::pipeline::RecordStream> {
-    let reader = maybe_decompress_stdin(reader);
+    let reader = maybe_decompress_stdin(reader)?;
     match format {
         InputFormat::Csv => Ok(Box::new(
             crate::io::read_csv_stream(reader, crate::io::CSV_DELIMITER)

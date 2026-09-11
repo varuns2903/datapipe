@@ -44,19 +44,39 @@ pub fn read_json_stream<'a, R: BufRead + 'a>(
         };
     }
 
-    Box::new(reader.lines().enumerate().filter_map(|(i, line_res)| {
-        let line_no = i + 1;
-        let line = match line_res {
-            Ok(l) => l,
-            Err(e) => return Some(Err(anyhow::anyhow!("IO error reading line {line_no}: {e}"))),
-        };
-        if line.trim().is_empty() {
+    // A plain iterator (filter_map over reader.lines()) would call the
+    // underlying reader again on every next() - fine for a JSON parse
+    // error, where the reader itself is still healthy and simply
+    // advances to the next line, but wrong for a genuine IO error: a
+    // reader that failed once (e.g. a decompressor hitting corrupt
+    // compressed data) has no guarantee of ever reaching a clean EOF, and
+    // some `Read` implementations re-report the same error indefinitely
+    // rather than terminating - which would otherwise spin forever
+    // instead of surfacing the error. So an IO error is yielded once and
+    // then unconditionally ends the stream, via the `stopped` flag below.
+    let mut lines = reader.lines().enumerate();
+    let mut stopped = false;
+    Box::new(std::iter::from_fn(move || loop {
+        if stopped {
             return None;
         }
-        Some(
-            serde_json::from_str::<Record>(&line)
-                .map_err(|e| anyhow::anyhow!("JSON parse error on line {line_no}: {e}")),
-        )
+        let (i, line_res) = lines.next()?;
+        let line_no = i + 1;
+        match line_res {
+            Ok(line) => {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                return Some(
+                    serde_json::from_str::<Record>(&line)
+                        .map_err(|e| anyhow::anyhow!("JSON parse error on line {line_no}: {e}")),
+                );
+            }
+            Err(e) => {
+                stopped = true;
+                return Some(Err(anyhow::anyhow!("IO error reading line {line_no}: {e}")));
+            }
+        }
     }))
 }
 
@@ -310,6 +330,29 @@ mod tests {
         // after the first error).
         assert!(results[2].is_ok());
         assert!(results[3].is_ok());
+    }
+
+    struct AlwaysErrReader;
+    impl std::io::Read for AlwaysErrReader {
+        fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("simulated broken reader"))
+        }
+    }
+
+    #[test]
+    fn read_json_stream_stops_after_io_error_instead_of_looping_forever() {
+        // Regression test for a real hang: a reader that keeps returning
+        // Err (rather than a clean EOF) on every read - which a
+        // decompressor can legitimately do on corrupt compressed data -
+        // previously caused the line iterator to call the broken reader
+        // again on every next(), spinning forever instead of surfacing
+        // the error once. This test would hang (rather than fail
+        // cleanly) if that regressed, since it drives the iterator with
+        // an unbounded `collect()`.
+        let reader = std::io::BufReader::new(AlwaysErrReader);
+        let results: Vec<_> = read_json_stream(reader).collect();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_err());
     }
 
     #[test]

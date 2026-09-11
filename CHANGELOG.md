@@ -7,7 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `read_json_stream` could spin forever instead of surfacing an error: a
+  reader that keeps returning `Err` on every read (rather than a clean
+  EOF) - which a decompressor can legitimately do on corrupt compressed
+  input - caused the line iterator to call the broken reader again on
+  every `next()`, since a plain `filter_map` over `reader.lines()` has no
+  memory of a prior error. Found while testing zstd support against a
+  deliberately corrupt `.zst` stream, which hung instead of failing.
+  Fixed by tracking a `stopped` flag: an IO error is now yielded exactly
+  once and unconditionally ends the stream afterward, regardless of what
+  the underlying reader would do if asked again. A JSON *parse* error
+  (the reader itself still healthy, just one bad line) is unaffected and
+  still allows processing to continue past it as before. Verified with a
+  regression test using a reader that always errors, driven through an
+  unbounded `collect()` - it would hang, rather than fail, if this
+  regressed.
+
 ### Added
+- zstd support alongside gzip, wherever `dp` already transparently
+  decompressed input: stdin auto-detection (sniffing the zstd magic
+  number the same way gzip's is sniffed) and `join <file>` when `<file>`
+  ends in `.zst`. Uses `ruzstd`, a pure-Rust decoder (and, for this
+  crate's own tests, its bundled pure-Rust encoder to generate zstd test
+  fixtures) - consistent with the earlier choice of `flate2`'s
+  `miniz_oxide` backend for gzip, so this doesn't add a C toolchain
+  requirement to the cross-platform cargo-dist release build either.
+  Unlike gzip's decoder, zstd's `StreamingDecoder::new` validates the
+  frame header eagerly at construction time, so `maybe_decompress_stdin`
+  now returns a `Result` to surface a corrupt zstd stream immediately
+  rather than only on first read. Verified: CLI integration tests for
+  zstd-compressed stdin (JSONL and CSV) and a zstd-compressed join file.
 - JSON input now also accepts a single JSON array (`[{...}, {...}]`) as
   an alternative to JSONL, auto-detected by whether the first
   non-whitespace byte is `[` or `{` - no flag needed, and works whether
