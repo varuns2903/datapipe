@@ -212,6 +212,38 @@ fn test_join_transparently_decompresses_zst_file() {
 }
 
 #[test]
+fn test_pretty_printed_single_json_object_input_is_auto_detected() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("filter")
+        .arg("true")
+        .write_stdin("{\n  \"a\": 1,\n  \"b\": 2\n}")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"a\":1,\"b\":2"));
+}
+
+#[test]
+fn test_minified_single_json_object_input_still_works() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("filter")
+        .arg("true")
+        .write_stdin("{\"a\":1,\"b\":2}")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"a\":1,\"b\":2"));
+}
+
+#[test]
+fn test_pretty_printed_object_combined_with_gzip() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("count")
+        .write_stdin(gzip_bytes(b"{\n  \"a\": 1\n}"))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"count\":1"));
+}
+
+#[test]
 fn test_json_array_input_is_auto_detected() {
     let mut cmd = Command::cargo_bin("dp").unwrap();
     cmd.arg("count")

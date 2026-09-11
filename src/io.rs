@@ -17,6 +17,30 @@ fn looks_like_json_array<R: BufRead>(reader: &mut R) -> bool {
     )
 }
 
+/// Peeks at a reader's first line (without consuming anything) to detect
+/// a pretty-printed single JSON object, e.g.:
+/// ```text
+/// {
+///   "a": 1,
+///   "b": 2
+/// }
+/// ```
+/// JSONL always puts a complete `{...}` object on one line, so a first
+/// line that's *just* `{` - the object's opening brace alone on its own
+/// line - can only mean this is one object pretty-printed across many
+/// lines, not JSONL. This is the standard pretty-printing convention
+/// (`jq .`, `python -m json.tool`, `serde_json::to_writer_pretty`), so
+/// detecting it needs no explicit flag, same as the array case above.
+fn looks_like_pretty_printed_object<R: BufRead>(reader: &mut R) -> bool {
+    match reader.fill_buf() {
+        Ok(buf) => {
+            let first_line = buf.split(|&b| b == b'\n').next().unwrap_or(buf);
+            std::str::from_utf8(first_line).map(str::trim) == Ok("{")
+        }
+        Err(_) => false,
+    }
+}
+
 // JSON In
 //
 // Parses one JSON object per line (true JSONL semantics) rather than treating
@@ -32,6 +56,13 @@ fn looks_like_json_array<R: BufRead>(reader: &mut R) -> bool {
 // read), so this path buffers the whole array into memory rather than
 // streaming record-by-record - an inherent property of the array syntax,
 // not a limitation specific to `dp`.
+//
+// Also transparently accepts a single pretty-printed JSON object (its
+// opening `{` alone on the first line), auto-detected via
+// `looks_like_pretty_printed_object`, for the same reason: a minified
+// `{"a":1,"b":2}` on one line already works as ordinary one-line JSONL,
+// but a pretty-printed object spans multiple lines and would otherwise
+// be shredded by the line-by-line JSONL parser below.
 pub fn read_json_stream<'a, R: BufRead + 'a>(
     mut reader: R,
 ) -> Box<dyn Iterator<Item = Result<Record>> + 'a> {
@@ -40,6 +71,15 @@ pub fn read_json_stream<'a, R: BufRead + 'a>(
             .map_err(|e| anyhow::anyhow!("JSON array parse error: {e}"))
         {
             Ok(records) => Box::new(records.into_iter().map(Ok)),
+            Err(e) => Box::new(std::iter::once(Err(e))),
+        };
+    }
+
+    if looks_like_pretty_printed_object(&mut reader) {
+        return match serde_json::from_reader::<_, Record>(reader)
+            .map_err(|e| anyhow::anyhow!("JSON object parse error: {e}"))
+        {
+            Ok(record) => Box::new(std::iter::once(Ok(record))),
             Err(e) => Box::new(std::iter::once(Err(e))),
         };
     }
@@ -400,6 +440,53 @@ mod tests {
     fn read_json_stream_empty_array_yields_nothing() {
         let results = read_all("[]");
         assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn read_json_stream_accepts_a_pretty_printed_single_object() {
+        let results = read_all("{\n  \"a\": 1,\n  \"b\": 2\n}");
+        assert_eq!(results.len(), 1);
+        let rec = results[0].as_ref().unwrap();
+        assert_eq!(rec.get("a"), Some(&Value::Integer(1)));
+        assert_eq!(rec.get("b"), Some(&Value::Integer(2)));
+    }
+
+    #[test]
+    fn read_json_stream_minified_single_object_still_treated_as_jsonl() {
+        // A minified single object on one line is already valid JSONL -
+        // it must not be routed through the pretty-object path (whose
+        // detection specifically requires a lone `{` on the first line).
+        let results = read_all("{\"a\":1,\"b\":2}");
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_ok());
+    }
+
+    #[test]
+    fn read_json_stream_ordinary_jsonl_unaffected_by_pretty_object_detection() {
+        let results = read_all("{\"a\":1}\n{\"a\":2}\n{\"a\":3}\n");
+        assert_eq!(results.len(), 3);
+        for r in &results {
+            assert!(r.is_ok());
+        }
+    }
+
+    #[test]
+    fn read_json_stream_malformed_pretty_object_yields_one_error() {
+        let results = read_all("{\n  \"a\": 1,\n");
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_err());
+        assert!(results[0]
+            .as_ref()
+            .unwrap_err()
+            .to_string()
+            .contains("JSON object parse error"));
+    }
+
+    #[test]
+    fn read_json_stream_empty_pretty_printed_object() {
+        let results = read_all("{\n}");
+        assert_eq!(results.len(), 1);
+        assert!(results[0].as_ref().unwrap().is_empty());
     }
 
     #[test]

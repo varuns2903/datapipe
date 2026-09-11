@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- JSON input also accepts a single pretty-printed JSON object (e.g.
+  output from `jq .` or `python -m json.tool`), auto-detected by whether
+  its opening `{` is alone on the first line - the standard
+  pretty-printing convention. A minified single-line object already
+  worked (it's already valid one-line JSONL), but a pretty-printed one
+  spans multiple lines and was previously shredded by JSONL's
+  line-by-line parser (each fragment line failing to parse on its own).
+  Implemented as `looks_like_pretty_printed_object()`, the same
+  peek-without-consuming technique as the JSON-array and gzip/zstd magic
+  byte detection, so it composes with those - a gzipped pretty-printed
+  object works too. Verified: `io` unit tests (pretty object, still
+  treating minified single-line objects and ordinary JSONL correctly,
+  malformed pretty object, empty pretty object) and CLI integration
+  tests (pretty object, minified object regression check, pretty object
+  combined with gzip).
+
 ### Fixed
 - `read_json_stream` could spin forever instead of surfacing an error: a
   reader that keeps returning `Err` on every read (rather than a clean
