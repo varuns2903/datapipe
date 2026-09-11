@@ -76,7 +76,7 @@ sudo mv dp.1.gz /usr/local/share/man/man1/
 Process a stream of JSON records, filter them, sort them, and output as CSV:
 
 ```bash
-cat examples/users.jsonl | dp filter '.age >= 21' | dp sort age --desc | dp csv
+cat examples/users.jsonl | dp filter '.age >= 21' | dp sort age:desc | dp csv
 ```
 
 ## Available Commands
@@ -90,7 +90,7 @@ Run `dp <command> --help` for full details on any command below.
 - `limit <max>`: Halts the stream after yielding `N` records.
 - `explode <field>`: Expands an array-valued field into one record per element. Records where the field isn't an array pass through unchanged.
 - `map <field> <expression>`: Computes a new field (or overwrites an existing one) using an expression.
-- `join <file> --on <field> [--type <left|inner|right|full>] [--merge]`: Joins each record with a matching record from `<file>` (JSONL or CSV) on the given field. Defaults to `left`. By default, `<file>` is loaded entirely into memory as a hash table before the main stream starts, so memory usage is proportional to its size — fine for typical lookup-table-sized files, not bounded for huge ones.
+- `join <file> --on <fields> [--type <left|inner|right|full>] [--merge]`: Joins each record with a matching record from `<file>` (JSONL or CSV) on the given field(s). `--on` accepts one or more comma-separated fields for a composite key, e.g. `--on region,id` — all of them must match for two records to be considered the same. Defaults to `left`. By default, `<file>` is loaded entirely into memory as a hash table before the main stream starts, so memory usage is proportional to its size — fine for typical lookup-table-sized files, not bounded for huge ones.
   - `left` (default): keeps every record from the main stream; merges in matching fields from `<file>` when found, otherwise passes the record through unchanged.
   - `inner`: keeps only records that have a match in `<file>`.
   - `right`: keeps only records that have a match, then appends any record from `<file>` that was never matched (with no fields from the main stream).
@@ -107,10 +107,10 @@ Run `dp <command> --help` for full details on any command below.
 
 ### Stateful Operations
 *(Note: These operations must buffer the stream into memory, or spill to temp files for `sort`)*
-- `sort <field> [--desc]`: Sorts the records by the specified field. Uses an external k-way merge sort (temp files), so it isn't bounded by RAM even for very large streams.
-- `unique <field>`: Keeps only the first occurrence of each unique value in a field. Memory usage is proportional to the number of *distinct* values seen, not the stream length.
-- `dedup`: Drops exact duplicate records (comparing every field), keeping the first occurrence. Unlike `unique <field>`, which dedupes on one field alone, `dedup` only drops a record if it matches an earlier one in *every* field.
-- `group <by> [--sum <field>] [--count]`: Groups records by a field, optionally summing another numeric field and/or counting records per group. Memory usage is proportional to the number of *distinct* groups, not the stream length.
+- `sort <fields>`: Sorts the records by one or more comma-separated fields. Each field defaults to ascending; append `:desc` (or `:asc`) to override per field, e.g. `dp sort country,age:desc` sorts by `country` ascending, then by `age` descending within each `country`. Uses an external k-way merge sort (temp files), so it isn't bounded by RAM even for very large streams.
+- `unique <fields>`: Keeps only the first occurrence of each distinct combination of one or more comma-separated fields. Memory usage is proportional to the number of *distinct* combinations seen, not the stream length.
+- `dedup`: Drops exact duplicate records (comparing every field), keeping the first occurrence. Unlike `unique <fields>`, which dedupes on specific fields, `dedup` only drops a record if it matches an earlier one in *every* field.
+- `group <by> [--sum <field>] [--count]`: Groups records by one or more comma-separated fields, optionally summing another numeric field and/or counting records per group. Memory usage is proportional to the number of *distinct* groups, not the stream length.
 - `freq <field> [--limit <n>]`: Counts occurrences of each distinct value in a field, sorted most-frequent first, with each value's percentage of the stream. Unlike `group --count` (unsorted, no percentage), this is built for quick data exploration — pipe into `dp table` for a readable view. Optionally keep only the top N values with `--limit`. Same memory tradeoff as `group`/`unique`.
 - `sample <n>`: Takes a uniform random sample of `n` records from the stream, via reservoir sampling — a single streaming pass with O(n) memory, without needing to know the stream length in advance. If the stream has fewer than `n` records, all of them are returned.
 
@@ -152,8 +152,7 @@ expression = ".age >= 21 && .active == true"
 
 [[stages]]
 type = "sort"
-field = "age"
-desc = true
+fields = "age:desc"
 
 [[stages]]
 type = "select"
@@ -164,7 +163,7 @@ fields = ["name", "age"]
 cat users.jsonl | dp run pipeline.toml
 ```
 
-Each `[[stages]]` table's `type` corresponds to a subcommand (`filter`, `search`, `select`, `sort`, `unique`, `dedup`, `count`, `sum`, `avg`, `min`, `max`, `schema`, `stats`, `group`, `freq`, `explode`, `rename`, `flatten`, `sample`, `map`, `join`) with the same field names as that subcommand's flags/arguments — e.g. `join` takes `file`, `on`, and an optional `join_type` (`"left"` | `"inner"` | `"right"` | `"full"`, defaults to `"left"`). Format/utility commands (`csv`, `table`, `completions`, `man`, `run` itself) aren't valid `[[stages]]` entries — use the top-level `out_csv`/`out_table` settings for those output formats instead.
+Each `[[stages]]` table's `type` corresponds to a subcommand (`filter`, `search`, `select`, `sort`, `unique`, `dedup`, `count`, `sum`, `avg`, `min`, `max`, `schema`, `stats`, `group`, `freq`, `explode`, `rename`, `flatten`, `sample`, `map`, `join`) with the same field names as that subcommand's flags/arguments — e.g. `sort`/`unique` take a comma-separated `fields` string (`sort` fields may carry a `:desc`/`:asc` suffix, e.g. `"age:desc"`), `group`/`join` take a comma-separated `by`/`on` string, and `join` also takes `file` and an optional `join_type` (`"left"` | `"inner"` | `"right"` | `"full"`, defaults to `"left"`). Format/utility commands (`csv`, `table`, `completions`, `man`, `run` itself) aren't valid `[[stages]]` entries — use the top-level `out_csv`/`out_table` settings for those output formats instead.
 
 ## Expressions
 
@@ -215,7 +214,7 @@ dp filter 'year(.created_at) == 2024'
 ## Known limitations
 
 - **Integer precision beyond `i64`:** JSON integers larger than `i64::MAX` (~9.2 × 10¹⁸, about 19 digits) lose precision — they're silently represented as a 64-bit float instead of the exact integer. This can affect very large numeric IDs (some 64-bit unsigned or 128-bit identifiers). Regular integers, and floats in general, are unaffected.
-- **Hash-key collisions in `group`/`join`/`unique`:** these stages key non-string values by serializing them to a JSON string internally. Two different-typed values that happen to serialize identically could theoretically collide — an edge case that hasn't come up in practice but is worth knowing about if you're grouping/joining/deduplicating on a field with mixed or unusual types.
+- **Hash-key collisions in `group`/`join`/`unique`:** these stages key non-string values by serializing them to a JSON string internally. Two different-typed values that happen to serialize identically could theoretically collide — an edge case that hasn't come up in practice but is worth knowing about if you're grouping/joining/deduplicating on a field with mixed or unusual types. When multiple fields form a composite key (`unique a,b`, `group a,b`, `join --on a,b`), each field's encoded value is joined with a control character (`\u{1}`) that's vanishingly unlikely to appear in real field content, so a key can't collide across a field-count boundary the way naive string concatenation could. `sort` isn't affected by this - it compares values directly rather than via a serialized key.
 - **No input size guard:** there's currently no limit on a single record's size before it's parsed. An extremely long single line (or field) will be read into memory in full before any pipeline stage runs. Worth keeping in mind if you're processing data from an untrusted source.
 - **Broken-pipe output prints an error:** piping `dp`'s output into a command that closes the pipe early (e.g. `dp inspect largefile.jsonl | head`) prints `Error: Broken pipe (os error 32)` to stderr and exits non-zero, rather than exiting silently the way most well-behaved Unix tools do. It doesn't panic or corrupt output, just surfaces a benign, expected condition as an error message.
 

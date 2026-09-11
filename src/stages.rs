@@ -1,6 +1,56 @@
 use crate::model::{Record, Value};
 use crate::pipeline::{RecordStream, Stage};
 
+/// Parses a comma-separated field list (`"a,b,c"`), used by `unique`,
+/// `group by`, and `join --on` wherever multiple fields form a composite
+/// key. Rejects empty entries (e.g. a trailing comma or `"a,,b"`) up front
+/// rather than silently treating them as a field named `""`.
+pub(crate) fn parse_field_list(spec: &str) -> anyhow::Result<Vec<String>> {
+    let fields: Vec<String> = spec.split(',').map(|s| s.trim().to_string()).collect();
+    if fields.iter().any(|f| f.is_empty()) {
+        return Err(anyhow::anyhow!(
+            "Invalid field list '{}': fields must be non-empty and comma-separated",
+            spec
+        ));
+    }
+    Ok(fields)
+}
+
+/// Parses a `sort`-style field spec: comma-separated fields, each optionally
+/// suffixed with `:desc` or `:asc` (ascending is the default when omitted),
+/// e.g. `"age"`, `"age:desc"`, or `"country,age:desc"`.
+pub(crate) fn parse_sort_spec(spec: &str) -> anyhow::Result<Vec<(String, bool)>> {
+    spec.split(',')
+        .map(|part| {
+            let part = part.trim();
+            if let Some(name) = part.strip_suffix(":desc") {
+                if name.is_empty() {
+                    return Err(anyhow::anyhow!(
+                        "Invalid sort spec '{}': empty field name before ':desc'",
+                        spec
+                    ));
+                }
+                Ok((name.to_string(), true))
+            } else if let Some(name) = part.strip_suffix(":asc") {
+                if name.is_empty() {
+                    return Err(anyhow::anyhow!(
+                        "Invalid sort spec '{}': empty field name before ':asc'",
+                        spec
+                    ));
+                }
+                Ok((name.to_string(), false))
+            } else if part.is_empty() {
+                Err(anyhow::anyhow!(
+                    "Invalid sort spec '{}': fields must be non-empty and comma-separated",
+                    spec
+                ))
+            } else {
+                Ok((part.to_string(), false))
+            }
+        })
+        .collect()
+}
+
 pub struct FilterStage {
     pub ast: crate::expr::Expr,
 }
@@ -229,15 +279,35 @@ impl Stage for MaxStage {
 }
 
 pub struct SortStage {
-    pub field: String,
-    pub desc: bool,
+    /// Each entry is `(field, desc)`; earlier entries take precedence as
+    /// the primary sort key, later ones only break ties.
+    pub fields: Vec<(String, bool)>,
+}
+
+/// Compares two records across a multi-field sort spec, stopping at the
+/// first field that isn't equal (standard lexicographic tie-breaking).
+fn cmp_by_sort_fields(a: &Record, b: &Record, fields: &[(String, bool)]) -> std::cmp::Ordering {
+    for (field, desc) in fields {
+        let val_a = a.get(field).unwrap_or(&Value::Null);
+        let val_b = b.get(field).unwrap_or(&Value::Null);
+        let mut ord = crate::model::cmp_values(val_a, val_b);
+        if *desc {
+            ord = ord.reverse();
+        }
+        if ord != std::cmp::Ordering::Equal {
+            return ord;
+        }
+    }
+    std::cmp::Ordering::Equal
 }
 
 pub(crate) struct HeapItem {
     record: Record,
     file_idx: usize,
-    field: String,
-    desc: bool,
+    // Shared rather than cloned per item: field lists are small, but a
+    // BinaryHeap pushes/pops one HeapItem per record, so this avoids a
+    // Vec<(String, bool)> allocation on every single push.
+    fields: std::rc::Rc<Vec<(String, bool)>>,
 }
 
 impl PartialEq for HeapItem {
@@ -253,12 +323,7 @@ impl PartialOrd for HeapItem {
 }
 impl Ord for HeapItem {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        let val_a = self.record.get(&self.field).unwrap_or(&Value::Null);
-        let val_b = other.record.get(&other.field).unwrap_or(&Value::Null);
-        let mut ord = crate::model::cmp_values(val_a, val_b);
-        if self.desc {
-            ord = ord.reverse();
-        }
+        let ord = cmp_by_sort_fields(&self.record, &other.record, &self.fields);
         // Reverse because BinaryHeap is a MAX heap, and we want a MIN heap for K-way merge
         ord.reverse()
     }
@@ -267,8 +332,7 @@ impl Ord for HeapItem {
 pub struct ExternalSortIter<'a> {
     pub readers: Vec<RecordStream<'a>>,
     pub(crate) heap: std::collections::BinaryHeap<HeapItem>,
-    pub field: String,
-    pub desc: bool,
+    pub(crate) fields: std::rc::Rc<Vec<(String, bool)>>,
     pub initialized: bool,
     // Kept alive for the full duration of reading (rather than dropped right
     // after opening each file) so temp-file cleanup happens deterministically
@@ -286,8 +350,7 @@ impl<'a> Iterator for ExternalSortIter<'a> {
                     self.heap.push(HeapItem {
                         record: rec,
                         file_idx: idx,
-                        field: self.field.clone(),
-                        desc: self.desc,
+                        fields: std::rc::Rc::clone(&self.fields),
                     });
                 }
             }
@@ -302,8 +365,7 @@ impl<'a> Iterator for ExternalSortIter<'a> {
                 self.heap.push(HeapItem {
                     record: next_rec,
                     file_idx: idx,
-                    field: self.field.clone(),
-                    desc: self.desc,
+                    fields: std::rc::Rc::clone(&self.fields),
                 });
             }
             return Some(Ok(record));
@@ -314,7 +376,7 @@ impl<'a> Iterator for ExternalSortIter<'a> {
 
 impl Stage for SortStage {
     fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
-        external_sort(input, self.field.clone(), self.desc)
+        external_sort(input, self.fields.clone())
     }
 }
 
@@ -326,9 +388,9 @@ impl Stage for SortStage {
 /// even though the implementation never actually borrows from `self`.
 pub(crate) fn external_sort<'a>(
     mut input: RecordStream<'a>,
-    field: String,
-    desc: bool,
+    fields: Vec<(String, bool)>,
 ) -> RecordStream<'a> {
+    let fields = std::rc::Rc::new(fields);
     let mut temp_files = Vec::new();
 
     loop {
@@ -344,15 +406,7 @@ pub(crate) fn external_sort<'a>(
             break;
         }
 
-        chunk.sort_by(|a, b| {
-            let val_a = a.get(&field).unwrap_or(&Value::Null);
-            let val_b = b.get(&field).unwrap_or(&Value::Null);
-            let mut ord = crate::model::cmp_values(val_a, val_b);
-            if desc {
-                ord = ord.reverse();
-            }
-            ord
-        });
+        chunk.sort_by(|a, b| cmp_by_sort_fields(a, b, &fields));
 
         let mut tmp = tempfile::NamedTempFile::new().unwrap();
         for rec in chunk {
@@ -378,8 +432,7 @@ pub(crate) fn external_sort<'a>(
     Box::new(ExternalSortIter {
         readers,
         heap: std::collections::BinaryHeap::new(),
-        field,
-        desc,
+        fields,
         initialized: false,
         _temp_files: temp_files,
     })
@@ -434,22 +487,34 @@ impl Stage for MapStage {
 }
 
 pub struct UniqueStage {
-    pub field: String,
+    /// Distinctness is keyed on the combination of these fields.
+    pub fields: Vec<String>,
 }
 
 impl Stage for UniqueStage {
     fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
-        let field = self.field.clone();
+        let fields = self.fields.clone();
         let mut seen = std::collections::HashSet::new();
 
         let filtered = input.filter_map(move |res| match res {
             Ok(record) => {
-                let val = record.get(&field).unwrap_or(&Value::Null);
-                let val_str = serde_json::to_string(val).unwrap_or_default();
-                if seen.contains(&val_str) {
+                // A control character (never realistically part of a field's
+                // own string content) joins each field's serialized value,
+                // so a composite key can't collide across a field-count
+                // boundary the way naive string concatenation could (e.g.
+                // ("ab","c") vs ("a","bc")).
+                let key: String = fields
+                    .iter()
+                    .map(|f| {
+                        let val = record.get(f).unwrap_or(&Value::Null);
+                        serde_json::to_string(val).unwrap_or_default()
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\u{1}");
+                if seen.contains(&key) {
                     None
                 } else {
-                    seen.insert(val_str);
+                    seen.insert(key);
                     Some(Ok(record))
                 }
             }
@@ -672,7 +737,8 @@ impl Stage for StatsStage {
 }
 
 pub struct GroupStage {
-    pub by: String,
+    /// Grouping key is the combination of these fields.
+    pub by: Vec<String>,
     pub sum: Option<String>,
     pub count: bool,
 }
@@ -683,7 +749,12 @@ impl Stage for GroupStage {
         let sum_field = self.sum.clone();
         let do_count = self.count;
 
-        let mut groups: indexmap::IndexMap<String, (i64, f64, i64, bool)> =
+        // Keyed on a composite string (one entry per distinct combination
+        // of `by` values), but the original, untruncated Values for each
+        // `by` field are kept alongside so the output preserves their real
+        // type (e.g. an integer group key stays an integer) instead of
+        // being flattened to a string.
+        let mut groups: indexmap::IndexMap<String, (Vec<Value>, i64, f64, i64, bool)> =
             indexmap::IndexMap::new();
 
         for res in input {
@@ -691,31 +762,39 @@ impl Stage for GroupStage {
                 Ok(rec) => rec,
                 Err(e) => return Box::new(std::iter::once(Err(e))),
             };
-            let group_key = match rec.get(&by) {
-                Some(Value::String(s)) => s.clone(),
-                Some(val) => serde_json::to_string(val).unwrap_or_default(),
-                None => "null".to_string(),
-            };
+            let key_values: Vec<Value> = by
+                .iter()
+                .map(|f| rec.get(f).cloned().unwrap_or(Value::Null))
+                .collect();
+            // Same control-character join as UniqueStage, to avoid
+            // composite-key collisions across a field-count boundary.
+            let group_key = key_values
+                .iter()
+                .map(|v| serde_json::to_string(v).unwrap_or_default())
+                .collect::<Vec<_>>()
+                .join("\u{1}");
 
-            let entry = groups.entry(group_key).or_insert((0, 0.0, 0, false));
-            entry.2 += 1;
+            let entry = groups
+                .entry(group_key)
+                .or_insert_with(|| (key_values, 0, 0.0, 0, false));
+            entry.3 += 1;
 
             if let Some(ref field) = sum_field {
                 if let Some(val) = rec.get(field) {
                     match val {
                         Value::Integer(i) => {
-                            if entry.3 {
-                                entry.1 += *i as f64;
+                            if entry.4 {
+                                entry.2 += *i as f64;
                             } else {
-                                entry.0 += i;
+                                entry.1 += i;
                             }
                         }
                         Value::Float(f) => {
-                            if !entry.3 {
-                                entry.3 = true;
-                                entry.1 = entry.0 as f64;
+                            if !entry.4 {
+                                entry.4 = true;
+                                entry.2 = entry.1 as f64;
                             }
-                            entry.1 += f;
+                            entry.2 += f;
                         }
                         _ => {}
                     }
@@ -724,9 +803,11 @@ impl Stage for GroupStage {
         }
 
         let mut output = Vec::new();
-        for (key, (sum_int, sum_float, count, is_float)) in groups {
+        for (_, (key_values, sum_int, sum_float, count, is_float)) in groups {
             let mut rec = indexmap::IndexMap::new();
-            rec.insert(by.clone(), Value::String(key));
+            for (field_name, val) in by.iter().zip(key_values) {
+                rec.insert(field_name.clone(), val);
+            }
             if do_count {
                 rec.insert("count".to_string(), Value::Integer(count));
             }
@@ -813,16 +894,27 @@ pub enum JoinType {
 
 pub struct JoinStage {
     pub hash_map: std::sync::Arc<std::collections::HashMap<String, Record>>,
-    pub on: String,
+    pub on: Vec<String>,
     pub join_type: JoinType,
 }
 
-fn join_key_for(record: &Record, on: &str) -> Option<String> {
-    match record.get(on) {
-        Some(Value::String(s)) => Some(s.clone()),
-        Some(val) => Some(serde_json::to_string(val).unwrap_or_default()),
-        None => None,
+/// Builds the hash-join key for a record across one or more `on` fields.
+/// Returns `None` (no possible match) if *any* of the fields is missing -
+/// same policy the single-field version always had. For multiple fields,
+/// each field's encoded value is joined with a control character that
+/// can't realistically appear in real field content, so a composite key
+/// can't collide across a field-count boundary the way naive
+/// concatenation could.
+pub(crate) fn join_key_for(record: &Record, on: &[String]) -> Option<String> {
+    let mut parts = Vec::with_capacity(on.len());
+    for field in on {
+        match record.get(field) {
+            Some(Value::String(s)) => parts.push(s.clone()),
+            Some(val) => parts.push(serde_json::to_string(val).unwrap_or_default()),
+            None => return None,
+        }
     }
+    Some(parts.join("\u{1}"))
 }
 
 /// Streams left-side records first (merging in matching right-side fields,
@@ -834,7 +926,7 @@ fn join_key_for(record: &Record, on: &str) -> Option<String> {
 struct JoinIter<'a> {
     left: RecordStream<'a>,
     hash_map: std::sync::Arc<std::collections::HashMap<String, Record>>,
-    on: String,
+    on: Vec<String>,
     join_type: JoinType,
     matched_keys: std::collections::HashSet<String>,
     right_tail: Option<std::vec::IntoIter<anyhow::Result<Record>>>,
@@ -861,7 +953,7 @@ impl<'a> Iterator for JoinIter<'a> {
                         self.matched_keys.insert(k);
                     }
                     for (k, v) in right_record {
-                        if k != &self.on {
+                        if !self.on.contains(k) {
                             record.insert(k.clone(), v.clone());
                         }
                     }
@@ -908,8 +1000,22 @@ impl Stage for JoinStage {
     }
 }
 
-fn join_key_value(record: &Record, on: &str) -> Value {
-    record.get(on).cloned().unwrap_or(Value::Null)
+fn join_key_values(record: &Record, on: &[String]) -> Vec<Value> {
+    on.iter()
+        .map(|f| record.get(f).cloned().unwrap_or(Value::Null))
+        .collect()
+}
+
+/// Lexicographic comparison across a composite join key (one `Value` per
+/// `on` field), stopping at the first field that differs.
+fn cmp_key_values(a: &[Value], b: &[Value]) -> std::cmp::Ordering {
+    for (av, bv) in a.iter().zip(b.iter()) {
+        let ord = crate::model::cmp_values(av, bv);
+        if ord != std::cmp::Ordering::Equal {
+            return ord;
+        }
+    }
+    std::cmp::Ordering::Equal
 }
 
 /// `join --merge`: a streaming sort-merge join, used instead of `JoinStage`'s
@@ -929,13 +1035,13 @@ fn join_key_value(record: &Record, on: &str) -> Value {
 /// rather than papered over, since it's a real difference a user might rely
 /// on one way or the other.
 pub struct MergeJoinStage {
-    pub on: String,
+    pub on: Vec<String>,
     pub join_type: JoinType,
     right_sorted: std::cell::RefCell<Option<RecordStream<'static>>>,
 }
 
 impl MergeJoinStage {
-    pub fn new(on: String, join_type: JoinType, right_sorted: RecordStream<'static>) -> Self {
+    pub fn new(on: Vec<String>, join_type: JoinType, right_sorted: RecordStream<'static>) -> Self {
         Self {
             on,
             join_type,
@@ -946,7 +1052,8 @@ impl MergeJoinStage {
 
 impl Stage for MergeJoinStage {
     fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
-        let left_sorted = external_sort(input, self.on.clone(), false);
+        let sort_fields: Vec<(String, bool)> = self.on.iter().map(|f| (f.clone(), false)).collect();
+        let left_sorted = external_sort(input, sort_fields);
         let right_sorted = self
             .right_sorted
             .borrow_mut()
@@ -972,7 +1079,7 @@ impl Stage for MergeJoinStage {
 struct MergeJoinIter<'a> {
     left: std::iter::Peekable<RecordStream<'a>>,
     right: std::iter::Peekable<RecordStream<'a>>,
-    on: String,
+    on: Vec<String>,
     join_type: JoinType,
     queue: std::collections::VecDeque<anyhow::Result<Record>>,
 }
@@ -1016,9 +1123,9 @@ impl<'a> MergeJoinIter<'a> {
                 true
             }
             (Some(Ok(l)), Some(Ok(r))) => {
-                let lk = join_key_value(l, &self.on);
-                let rk = join_key_value(r, &self.on);
-                match crate::model::cmp_values(&lk, &rk) {
+                let lk = join_key_values(l, &self.on);
+                let rk = join_key_values(r, &self.on);
+                match cmp_key_values(&lk, &rk) {
                     std::cmp::Ordering::Less => {
                         let rec = self.left.next().unwrap().unwrap();
                         if matches!(self.join_type, JoinType::Left | JoinType::Full) {
@@ -1037,7 +1144,7 @@ impl<'a> MergeJoinIter<'a> {
                         let key = lk;
                         let mut left_group = Vec::new();
                         while let Some(Ok(rec)) = self.left.peek() {
-                            if crate::model::cmp_values(&join_key_value(rec, &self.on), &key)
+                            if cmp_key_values(&join_key_values(rec, &self.on), &key)
                                 != std::cmp::Ordering::Equal
                             {
                                 break;
@@ -1046,7 +1153,7 @@ impl<'a> MergeJoinIter<'a> {
                         }
                         let mut right_group = Vec::new();
                         while let Some(Ok(rec)) = self.right.peek() {
-                            if crate::model::cmp_values(&join_key_value(rec, &self.on), &key)
+                            if cmp_key_values(&join_key_values(rec, &self.on), &key)
                                 != std::cmp::Ordering::Equal
                             {
                                 break;
@@ -1057,7 +1164,7 @@ impl<'a> MergeJoinIter<'a> {
                             for r in &right_group {
                                 let mut merged = l.clone();
                                 for (k, v) in r {
-                                    if k != &self.on {
+                                    if !self.on.contains(k) {
                                         merged.insert(k.clone(), v.clone());
                                     }
                                 }
@@ -1412,8 +1519,7 @@ mod tests {
             rec(&[("n", Value::Integer(2))]),
         ]);
         let stage = SortStage {
-            field: "n".to_string(),
-            desc: false,
+            fields: vec![("n".to_string(), false)],
         };
         let out = collect_ok(stage.process(input));
         let values: Vec<_> = out.iter().map(|r| r.get("n").cloned().unwrap()).collect();
@@ -1431,8 +1537,7 @@ mod tests {
             rec(&[("n", Value::Integer(2))]),
         ]);
         let stage = SortStage {
-            field: "n".to_string(),
-            desc: true,
+            fields: vec![("n".to_string(), true)],
         };
         let out = collect_ok(stage.process(input));
         let values: Vec<_> = out.iter().map(|r| r.get("n").cloned().unwrap()).collect();
@@ -1446,8 +1551,7 @@ mod tests {
     fn sort_on_empty_stream_yields_nothing() {
         let input = stream(vec![]);
         let stage = SortStage {
-            field: "n".to_string(),
-            desc: false,
+            fields: vec![("n".to_string(), false)],
         };
         assert_eq!(collect_ok(stage.process(input)).len(), 0);
     }
@@ -1462,14 +1566,88 @@ mod tests {
         }
         let input = stream(records);
         let stage = SortStage {
-            field: "n".to_string(),
-            desc: false,
+            fields: vec![("n".to_string(), false)],
         };
         let out = collect_ok(stage.process(input));
         assert_eq!(out.len(), n as usize);
         for (i, r) in out.iter().enumerate() {
             assert_eq!(r.get("n"), Some(&Value::Integer(i as i64)));
         }
+    }
+
+    #[test]
+    fn sort_multi_field_primary_then_secondary() {
+        let input = stream(vec![
+            rec(&[("a", Value::Integer(1)), ("b", Value::Integer(2))]),
+            rec(&[("a", Value::Integer(1)), ("b", Value::Integer(1))]),
+            rec(&[("a", Value::Integer(0)), ("b", Value::Integer(5))]),
+        ]);
+        let stage = SortStage {
+            fields: vec![("a".to_string(), false), ("b".to_string(), false)],
+        };
+        let out = collect_ok(stage.process(input));
+        let pairs: Vec<_> = out
+            .iter()
+            .map(|r| (r.get("a").cloned().unwrap(), r.get("b").cloned().unwrap()))
+            .collect();
+        assert_eq!(
+            pairs,
+            vec![
+                (Value::Integer(0), Value::Integer(5)),
+                (Value::Integer(1), Value::Integer(1)),
+                (Value::Integer(1), Value::Integer(2)),
+            ]
+        );
+    }
+
+    #[test]
+    fn sort_multi_field_mixed_asc_desc() {
+        let input = stream(vec![
+            rec(&[("a", Value::Integer(1)), ("b", Value::Integer(1))]),
+            rec(&[("a", Value::Integer(1)), ("b", Value::Integer(2))]),
+            rec(&[("a", Value::Integer(0)), ("b", Value::Integer(9))]),
+        ]);
+        let stage = SortStage {
+            fields: vec![("a".to_string(), false), ("b".to_string(), true)],
+        };
+        let out = collect_ok(stage.process(input));
+        let pairs: Vec<_> = out
+            .iter()
+            .map(|r| (r.get("a").cloned().unwrap(), r.get("b").cloned().unwrap()))
+            .collect();
+        assert_eq!(
+            pairs,
+            vec![
+                (Value::Integer(0), Value::Integer(9)),
+                (Value::Integer(1), Value::Integer(2)),
+                (Value::Integer(1), Value::Integer(1)),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_sort_spec_parses_mixed_directions() {
+        let parsed = parse_sort_spec("age:desc,name,score:asc").unwrap();
+        assert_eq!(
+            parsed,
+            vec![
+                ("age".to_string(), true),
+                ("name".to_string(), false),
+                ("score".to_string(), false),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_sort_spec_rejects_empty_field() {
+        assert!(parse_sort_spec("age,,name").is_err());
+        assert!(parse_sort_spec("").is_err());
+    }
+
+    #[test]
+    fn parse_field_list_rejects_empty_field() {
+        assert!(parse_field_list("a,,b").is_err());
+        assert!(parse_field_list("").is_err());
     }
 
     #[test]
@@ -1523,12 +1701,28 @@ mod tests {
             rec(&[("id", Value::Integer(1))]),
         ]);
         let stage = UniqueStage {
-            field: "id".to_string(),
+            fields: vec!["id".to_string()],
         };
         let out = collect_ok(stage.process(input));
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].get("id"), Some(&Value::Integer(1)));
         assert_eq!(out[1].get("id"), Some(&Value::Integer(2)));
+    }
+
+    #[test]
+    fn unique_composite_key_across_multiple_fields() {
+        let input = stream(vec![
+            rec(&[("a", Value::Integer(1)), ("b", Value::Integer(2))]),
+            rec(&[("a", Value::Integer(1)), ("b", Value::Integer(2))]),
+            rec(&[("a", Value::Integer(1)), ("b", Value::Integer(3))]),
+        ]);
+        let stage = UniqueStage {
+            fields: vec!["a".to_string(), "b".to_string()],
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].get("b"), Some(&Value::Integer(2)));
+        assert_eq!(out[1].get("b"), Some(&Value::Integer(3)));
     }
 
     #[test]
@@ -1793,7 +1987,7 @@ mod tests {
             ]),
         ]);
         let stage = GroupStage {
-            by: "category".to_string(),
+            by: vec!["category".to_string()],
             sum: Some("amount".to_string()),
             count: true,
         };
@@ -1813,6 +2007,54 @@ mod tests {
             .unwrap();
         assert_eq!(group_b.get("count"), Some(&Value::Integer(1)));
         assert_eq!(group_b.get("sum_amount"), Some(&Value::Integer(1)));
+    }
+
+    #[test]
+    fn group_by_multiple_fields_and_preserves_value_types() {
+        let input = stream(vec![
+            rec(&[
+                ("country", Value::String("IN".to_string())),
+                ("city", Value::String("BLR".to_string())),
+            ]),
+            rec(&[
+                ("country", Value::String("IN".to_string())),
+                ("city", Value::String("BLR".to_string())),
+            ]),
+            rec(&[
+                ("country", Value::String("IN".to_string())),
+                ("city", Value::String("DEL".to_string())),
+            ]),
+        ]);
+        let stage = GroupStage {
+            by: vec!["country".to_string(), "city".to_string()],
+            sum: None,
+            count: true,
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out.len(), 2);
+        let blr = out
+            .iter()
+            .find(|r| r.get("city") == Some(&Value::String("BLR".to_string())))
+            .unwrap();
+        assert_eq!(blr.get("country"), Some(&Value::String("IN".to_string())));
+        assert_eq!(blr.get("count"), Some(&Value::Integer(2)));
+    }
+
+    #[test]
+    fn group_by_single_field_preserves_original_type_not_stringified() {
+        // Regression check: the by-field's original Value type (not a
+        // stringified copy) should come through in the output.
+        let input = stream(vec![
+            rec(&[("code", Value::Integer(1))]),
+            rec(&[("code", Value::Integer(1))]),
+        ]);
+        let stage = GroupStage {
+            by: vec!["code".to_string()],
+            sum: None,
+            count: true,
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out[0].get("code"), Some(&Value::Integer(1)));
     }
 
     #[test]
@@ -1911,7 +2153,7 @@ mod tests {
         );
         let stage = JoinStage {
             hash_map: std::sync::Arc::new(right),
-            on: "id".to_string(),
+            on: vec!["id".to_string()],
             join_type: JoinType::Left,
         };
 
@@ -1932,7 +2174,7 @@ mod tests {
         let right: std::collections::HashMap<String, Record> = std::collections::HashMap::new();
         let stage = JoinStage {
             hash_map: std::sync::Arc::new(right),
-            on: "id".to_string(),
+            on: vec!["id".to_string()],
             join_type: JoinType::Left,
         };
 
@@ -1965,7 +2207,7 @@ mod tests {
     fn inner_join_drops_unmatched_left_records() {
         let stage = JoinStage {
             hash_map: join_test_right_map(),
-            on: "id".to_string(),
+            on: vec!["id".to_string()],
             join_type: JoinType::Inner,
         };
         let input = stream(vec![
@@ -1984,7 +2226,7 @@ mod tests {
     fn right_join_drops_unmatched_left_and_appends_unmatched_right() {
         let stage = JoinStage {
             hash_map: join_test_right_map(),
-            on: "id".to_string(),
+            on: vec!["id".to_string()],
             join_type: JoinType::Right,
         };
         // Left has id "1" (matches) and "999" (no match, must be dropped).
@@ -2011,7 +2253,7 @@ mod tests {
     fn full_join_keeps_unmatched_left_and_appends_unmatched_right() {
         let stage = JoinStage {
             hash_map: join_test_right_map(),
-            on: "id".to_string(),
+            on: vec!["id".to_string()],
             join_type: JoinType::Full,
         };
         let input = stream(vec![
@@ -2039,12 +2281,64 @@ mod tests {
     fn full_join_on_empty_left_stream_yields_all_right_records() {
         let stage = JoinStage {
             hash_map: join_test_right_map(),
-            on: "id".to_string(),
+            on: vec!["id".to_string()],
             join_type: JoinType::Full,
         };
         let input = stream(vec![]);
         let out = collect_ok(stage.process(input));
         assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn join_multi_field_on_matches_composite_key_only() {
+        let on = vec!["region".to_string(), "id".to_string()];
+        let right_us = rec(&[
+            ("region", Value::String("us".to_string())),
+            ("id", Value::Integer(1)),
+            ("name", Value::String("Alice".to_string())),
+        ]);
+        let right_eu = rec(&[
+            ("region", Value::String("eu".to_string())),
+            ("id", Value::Integer(1)),
+            ("name", Value::String("Bob".to_string())),
+        ]);
+        let mut hash_map = std::collections::HashMap::new();
+        hash_map.insert(join_key_for(&right_us, &on).unwrap(), right_us);
+        hash_map.insert(join_key_for(&right_eu, &on).unwrap(), right_eu);
+
+        let stage = JoinStage {
+            hash_map: std::sync::Arc::new(hash_map),
+            on,
+            join_type: JoinType::Left,
+        };
+        let input = stream(vec![
+            rec(&[
+                ("region", Value::String("us".to_string())),
+                ("id", Value::Integer(1)),
+            ]),
+            rec(&[
+                ("region", Value::String("eu".to_string())),
+                ("id", Value::Integer(1)),
+            ]),
+        ]);
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out.len(), 2);
+        let us_match = out
+            .iter()
+            .find(|r| r.get("region") == Some(&Value::String("us".to_string())))
+            .unwrap();
+        assert_eq!(
+            us_match.get("name"),
+            Some(&Value::String("Alice".to_string()))
+        );
+        let eu_match = out
+            .iter()
+            .find(|r| r.get("region") == Some(&Value::String("eu".to_string())))
+            .unwrap();
+        assert_eq!(
+            eu_match.get("name"),
+            Some(&Value::String("Bob".to_string()))
+        );
     }
 
     // --- merge join (join --merge) ---
@@ -2058,8 +2352,8 @@ mod tests {
         // numeric order (e.g. "10" < "2"), which is exactly the assumption
         // an earlier, buggy version of this helper silently violated.
         let right_stream: RecordStream<'static> = Box::new(right.into_iter().map(Ok));
-        let right_sorted = external_sort(right_stream, "id".to_string(), false);
-        MergeJoinStage::new("id".to_string(), join_type, right_sorted)
+        let right_sorted = external_sort(right_stream, vec![("id".to_string(), false)]);
+        MergeJoinStage::new(vec!["id".to_string()], join_type, right_sorted)
     }
 
     #[test]
@@ -2227,6 +2521,56 @@ mod tests {
         let stage = merge_join_stage(JoinType::Left, vec![]);
         let out = collect_ok(stage.process(left));
         assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn merge_join_multi_field_on_matches_composite_key_only() {
+        let on = vec!["region".to_string(), "id".to_string()];
+        let right = vec![
+            rec(&[
+                ("region", Value::String("us".to_string())),
+                ("id", Value::Integer(1)),
+                ("name", Value::String("Alice".to_string())),
+            ]),
+            rec(&[
+                ("region", Value::String("eu".to_string())),
+                ("id", Value::Integer(1)),
+                ("name", Value::String("Bob".to_string())),
+            ]),
+        ];
+        let right_stream: RecordStream<'static> = Box::new(right.into_iter().map(Ok));
+        let sort_fields: Vec<(String, bool)> = on.iter().map(|f| (f.clone(), false)).collect();
+        let right_sorted = external_sort(right_stream, sort_fields);
+        let stage = MergeJoinStage::new(on, JoinType::Left, right_sorted);
+
+        let left = stream(vec![
+            rec(&[
+                ("region", Value::String("us".to_string())),
+                ("id", Value::Integer(1)),
+            ]),
+            rec(&[
+                ("region", Value::String("eu".to_string())),
+                ("id", Value::Integer(1)),
+            ]),
+        ]);
+        let out = collect_ok(stage.process(left));
+        assert_eq!(out.len(), 2);
+        let us_match = out
+            .iter()
+            .find(|r| r.get("region") == Some(&Value::String("us".to_string())))
+            .unwrap();
+        assert_eq!(
+            us_match.get("name"),
+            Some(&Value::String("Alice".to_string()))
+        );
+        let eu_match = out
+            .iter()
+            .find(|r| r.get("region") == Some(&Value::String("eu".to_string())))
+            .unwrap();
+        assert_eq!(
+            eu_match.get("name"),
+            Some(&Value::String("Bob".to_string()))
+        );
     }
 
     #[test]
@@ -2425,7 +2769,7 @@ mod tests {
             vec![rec(&[("k", Value::String("b".to_string()))])],
         );
         let stage = GroupStage {
-            by: "k".to_string(),
+            by: vec!["k".to_string()],
             sum: None,
             count: true,
         };

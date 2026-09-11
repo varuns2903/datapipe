@@ -3,7 +3,7 @@
 Process a stream of JSON records, filter them, sort them, and output as CSV:
 
 ```bash
-cat examples/users.jsonl | dp filter '.age >= 21' | dp sort age --desc | dp csv
+cat examples/users.jsonl | dp filter '.age >= 21' | dp sort age:desc | dp csv
 ```
 
 Each subcommand reads records from stdin and writes them to stdout, so stages chain together with ordinary shell pipes. For a pipeline with many stages, consider a [pipeline file](./pipeline-files.md) instead of a long one-liner.

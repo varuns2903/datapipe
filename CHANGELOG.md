@@ -8,6 +8,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Multi-field support for `sort`, `unique`, `group`, and `join --on`. Real
+  tabular data routinely needs a composite key (e.g. sort by country then
+  age, join on region+id), and previously every one of these stages was
+  limited to a single field.
+  - `sort <fields>`: now takes a comma-separated list, each optionally
+    suffixed with `:desc` or `:asc` (ascending is the default), e.g.
+    `sort country,age:desc`. Earlier fields take precedence; later ones
+    only break ties. Implemented via `parse_sort_spec()` and a shared
+    `cmp_by_sort_fields()` comparator reused by both the in-chunk sort and
+    the k-way merge's `HeapItem` ordering (now holding an
+    `Rc<Vec<(String, bool)>>` instead of a single field, to avoid a
+    per-heap-push allocation).
+  - `unique <fields>` and `group <by>`: now take a comma-separated field
+    list forming a composite key, internally joined with a control
+    character (`\u{1}`) to avoid key collisions across a field-count
+    boundary. `group`'s output also now preserves each `by` field's
+    original `Value` type instead of always stringifying it (a
+    side-effect improvement: the old single-field code path stringified
+    even integer/boolean group keys).
+  - `join --on <fields>`: now takes a comma-separated list; a record only
+    matches when *all* fields agree. Applies to both the default hash
+    join and `--merge`'s sort-merge join, which now sorts and compares by
+    the full composite key (`cmp_key_values()`) rather than one field.
+  - **Breaking CLI/pipeline-file change**: `sort`'s standalone `--desc`
+    flag is removed in favor of the `field:desc` suffix syntax (`sort
+    age --desc` → `sort age:desc`); pipeline-file `[[stages]]` entries
+    for `sort`/`unique` now take a single `fields` string instead of
+    `field`(`+desc`) - see updated README/mdBook examples.
+  - Verified: new unit tests for `parse_sort_spec`/`parse_field_list`
+    validation, multi-field sort (primary+secondary, mixed asc/desc),
+    composite-key `unique`/`group`/`join`/`join --merge`, plus end-to-end
+    CLI integration tests for each. All pre-existing single-field tests
+    pass unchanged (a single field is just a one-element list).
 - Unary minus in `filter`/`map` expressions: `-5`, `-.field`, and nested
   forms like `--5` or `3 - -5` now parse and evaluate correctly. Previously
   only binary subtraction was supported, so producing a negative value

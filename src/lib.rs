@@ -49,8 +49,16 @@ fn command_into_stage(command: Command, strict: bool) -> miette::Result<Option<B
         }
         Command::Select { fields, exclude } => Box::new(SelectStage { fields, exclude }),
         Command::Limit { max } => Box::new(LimitStage { max }),
-        Command::Sort { field, desc } => Box::new(SortStage { field, desc }),
-        Command::Unique { field } => Box::new(UniqueStage { field }),
+        Command::Sort { fields } => {
+            let fields = stages::parse_sort_spec(&fields)
+                .map_err(|e| miette::miette!("Invalid sort spec: {e}"))?;
+            Box::new(SortStage { fields })
+        }
+        Command::Unique { fields } => {
+            let fields = stages::parse_field_list(&fields)
+                .map_err(|e| miette::miette!("Invalid unique fields: {e}"))?;
+            Box::new(UniqueStage { fields })
+        }
         Command::Dedup => Box::new(DedupStage),
         Command::Count => Box::new(CountStage),
         Command::Sum { field } => Box::new(SumStage { field }),
@@ -59,7 +67,11 @@ fn command_into_stage(command: Command, strict: bool) -> miette::Result<Option<B
         Command::Max { field } => Box::new(MaxStage { field }),
         Command::Schema => Box::new(SchemaStage),
         Command::Stats => Box::new(StatsStage),
-        Command::Group { by, sum, count } => Box::new(GroupStage { by, sum, count }),
+        Command::Group { by, sum, count } => {
+            let by = stages::parse_field_list(&by)
+                .map_err(|e| miette::miette!("Invalid group by fields: {e}"))?;
+            Box::new(GroupStage { by, sum, count })
+        }
         Command::Freq { field, limit } => Box::new(FreqStage { field, limit }),
         Command::Explode { field } => Box::new(ExplodeStage { field }),
         Command::Rename { renames } => {
@@ -90,6 +102,8 @@ fn command_into_stage(command: Command, strict: bool) -> miette::Result<Option<B
             join_type,
             merge,
         } => {
+            let on = stages::parse_field_list(&on)
+                .map_err(|e| miette::miette!("Invalid join on fields: {e}"))?;
             let f = std::fs::File::open(&file)
                 .map_err(|e| miette::miette!("Failed to open join file: {}", e))?;
             let reader = BufReader::new(f);
@@ -109,7 +123,9 @@ fn command_into_stage(command: Command, strict: bool) -> miette::Result<Option<B
 
             if merge {
                 let join_records = apply_strict_policy(join_records, strict);
-                let right_sorted = stages::external_sort(join_records, on.clone(), false);
+                let sort_fields: Vec<(String, bool)> =
+                    on.iter().map(|f| (f.clone(), false)).collect();
+                let right_sorted = stages::external_sort(join_records, sort_fields);
                 Box::new(MergeJoinStage::new(on, join_type, right_sorted))
             } else {
                 let mut hash_map = std::collections::HashMap::new();
@@ -124,9 +140,8 @@ fn command_into_stage(command: Command, strict: bool) -> miette::Result<Option<B
                             continue;
                         }
                     };
-                    let key = match rec.get(&on) {
-                        Some(crate::model::Value::String(s)) => s.clone(),
-                        Some(val) => serde_json::to_string(val).unwrap_or_default(),
+                    let key = match stages::join_key_for(&rec, &on) {
+                        Some(k) => k,
                         None => continue,
                     };
                     hash_map.insert(key, rec);

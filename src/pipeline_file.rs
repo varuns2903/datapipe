@@ -17,8 +17,7 @@ use serde::Deserialize;
 ///
 /// [[stages]]
 /// type = "sort"
-/// field = "age"
-/// desc = true
+/// fields = "age:desc"
 /// ```
 #[derive(Debug, Deserialize)]
 pub struct PipelineFile {
@@ -59,12 +58,10 @@ pub enum StageSpec {
         max: usize,
     },
     Sort {
-        field: String,
-        #[serde(default)]
-        desc: bool,
+        fields: String,
     },
     Unique {
-        field: String,
+        fields: String,
     },
     Dedup,
     Count,
@@ -142,8 +139,8 @@ pub fn into_command(spec: StageSpec) -> Command {
         StageSpec::Search { text, regex } => Command::Search { text, regex },
         StageSpec::Select { fields, exclude } => Command::Select { fields, exclude },
         StageSpec::Limit { max } => Command::Limit { max },
-        StageSpec::Sort { field, desc } => Command::Sort { field, desc },
-        StageSpec::Unique { field } => Command::Unique { field },
+        StageSpec::Sort { fields } => Command::Sort { fields },
+        StageSpec::Unique { fields } => Command::Unique { fields },
         StageSpec::Dedup => Command::Dedup,
         StageSpec::Count => Command::Count,
         StageSpec::Sum { field } => Command::Sum { field },
@@ -227,8 +224,7 @@ mod tests {
 
             [[stages]]
             type = "sort"
-            field = "age"
-            desc = true
+            fields = "age:desc"
 
             [[stages]]
             type = "select"
@@ -240,23 +236,23 @@ mod tests {
         let file = parse(toml).unwrap();
         assert_eq!(file.stages.len(), 4);
         assert!(matches!(file.stages[0], StageSpec::Filter { .. }));
-        assert!(matches!(file.stages[1], StageSpec::Sort { desc: true, .. }));
+        assert!(matches!(file.stages[1], StageSpec::Sort { .. }));
         assert!(matches!(file.stages[2], StageSpec::Select { .. }));
         assert!(matches!(file.stages[3], StageSpec::Count));
     }
 
     #[test]
-    fn sort_desc_defaults_to_false() {
+    fn sort_fields_supports_multiple_comma_separated_fields() {
         let toml = r#"
             [[stages]]
             type = "sort"
-            field = "age"
+            fields = "country,age:desc"
         "#;
         let file = parse(toml).unwrap();
-        assert!(matches!(
-            file.stages[0],
-            StageSpec::Sort { desc: false, .. }
-        ));
+        match &file.stages[0] {
+            StageSpec::Sort { fields } => assert_eq!(fields, "country,age:desc"),
+            _ => panic!("expected Sort stage"),
+        }
     }
 
     #[test]

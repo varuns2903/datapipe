@@ -110,6 +110,93 @@ fn test_strict_mode_aborts_join_merge_on_malformed_line() {
 }
 
 #[test]
+fn test_sort_multi_field() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("sort")
+        .arg("a,b:desc")
+        .write_stdin("{\"a\":1,\"b\":1}\n{\"a\":1,\"b\":2}\n{\"a\":0,\"b\":9}\n")
+        .assert()
+        .success()
+        .stdout("{\"a\":0,\"b\":9}\n{\"a\":1,\"b\":2}\n{\"a\":1,\"b\":1}\n");
+}
+
+#[test]
+fn test_unique_multi_field_composite_key() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("unique")
+        .arg("a,b")
+        .write_stdin("{\"a\":1,\"b\":2}\n{\"a\":1,\"b\":2}\n{\"a\":1,\"b\":3}\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"b\":2"))
+        .stdout(predicate::str::contains("\"b\":3"));
+}
+
+#[test]
+fn test_group_multi_field() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("group")
+        .arg("country,city")
+        .arg("--count")
+        .write_stdin(
+            "{\"country\":\"IN\",\"city\":\"BLR\"}\n{\"country\":\"IN\",\"city\":\"BLR\"}\n{\"country\":\"IN\",\"city\":\"DEL\"}\n",
+        )
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"city\":\"BLR\",\"count\":2"))
+        .stdout(predicate::str::contains("\"city\":\"DEL\",\"count\":1"));
+}
+
+#[test]
+fn test_join_multi_field_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let right_path = dir.path().join("right.jsonl");
+    std::fs::write(
+        &right_path,
+        "{\"region\":\"us\",\"id\":1,\"name\":\"Alice\"}\n{\"region\":\"eu\",\"id\":1,\"name\":\"Bob\"}\n",
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("join")
+        .arg(right_path.to_str().unwrap())
+        .arg("--on")
+        .arg("region,id")
+        .write_stdin("{\"region\":\"us\",\"id\":1,\"order\":100}\n{\"region\":\"eu\",\"id\":1,\"order\":200}\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"region\":\"us\",\"id\":1,\"order\":100,\"name\":\"Alice\"",
+        ))
+        .stdout(predicate::str::contains(
+            "\"region\":\"eu\",\"id\":1,\"order\":200,\"name\":\"Bob\"",
+        ));
+}
+
+#[test]
+fn test_join_merge_multi_field_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let right_path = dir.path().join("right.jsonl");
+    std::fs::write(
+        &right_path,
+        "{\"region\":\"us\",\"id\":1,\"name\":\"Alice\"}\n{\"region\":\"eu\",\"id\":1,\"name\":\"Bob\"}\n",
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("join")
+        .arg(right_path.to_str().unwrap())
+        .arg("--on")
+        .arg("region,id")
+        .arg("--merge")
+        .write_stdin("{\"region\":\"us\",\"id\":1,\"order\":100}\n{\"region\":\"eu\",\"id\":1,\"order\":200}\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Alice"))
+        .stdout(predicate::str::contains("Bob"));
+}
+
+#[test]
 fn test_completions_registers_actual_binary_name() {
     for shell in ["bash", "zsh", "fish", "powershell", "elvish"] {
         let mut cmd = Command::cargo_bin("dp").unwrap();
@@ -256,8 +343,7 @@ expression = ".age >= 21"
 
 [[stages]]
 type = "sort"
-field = "age"
-desc = true
+fields = "age:desc"
 "#,
     )
     .unwrap();

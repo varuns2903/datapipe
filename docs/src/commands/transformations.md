@@ -15,10 +15,12 @@ These stages process the stream lazily, one record at a time, with O(1) memory.
 ## join
 
 ```
-join <file> --on <field> [--type <left|inner|right|full>] [--merge]
+join <file> --on <fields> [--type <left|inner|right|full>] [--merge]
 ```
 
-Joins each record with a matching record from `<file>` (JSONL or CSV) on the given field. Defaults to `left`.
+Joins each record with a matching record from `<file>` (JSONL or CSV) on the given field(s). Defaults to `left`.
+
+`--on` accepts one or more comma-separated fields, e.g. `--on region,id`, forming a composite key — a record only matches when *all* of the fields agree, not just one.
 
 - **`left`** (default): keeps every record from the main stream; merges in matching fields from `<file>` when found, otherwise passes the record through unchanged.
 - **`inner`**: keeps only records that have a match in `<file>`.
@@ -27,6 +29,7 @@ Joins each record with a matching record from `<file>` (JSONL or CSV) on the giv
 
 ```bash
 dp join customers.jsonl --on customer_id --type inner
+dp join sales.jsonl --on region,customer_id
 ```
 
 ### Memory: hash join (default) vs `--merge`

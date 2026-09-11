@@ -47,15 +47,14 @@ pub enum Command {
     },
     /// Halt the stream after yielding N records
     Limit { max: usize },
-    /// Sort records by the specified field (buffers the full stream)
-    Sort {
-        field: String,
-        /// Sort in descending order
-        #[arg(long)]
-        desc: bool,
-    },
-    /// Keep only the first record for each distinct value of a field
-    Unique { field: String },
+    /// Sort records by one or more comma-separated fields (buffers the full
+    /// stream via an external merge sort). Each field defaults to
+    /// ascending; append `:desc` (or `:asc`) to override, e.g.
+    /// `sort age:desc,name`.
+    Sort { fields: String },
+    /// Keep only the first record for each distinct combination of one or
+    /// more comma-separated fields
+    Unique { fields: String },
     /// Drop exact duplicate records (comparing all fields), keeping the
     /// first occurrence
     Dedup,
@@ -81,7 +80,8 @@ pub enum Command {
     /// Output the stream as an aligned, human-readable table (buffers the
     /// whole stream to compute column widths)
     Table,
-    /// Group records by a field, optionally summing another field and/or counting
+    /// Group records by one or more comma-separated fields, optionally
+    /// summing another field and/or counting
     Group {
         by: String,
         /// A numeric field to sum within each group
@@ -103,7 +103,8 @@ pub enum Command {
     Join {
         /// Path to a JSONL or CSV file to join against
         file: String,
-        /// The field to join on (must exist in both streams)
+        /// One or more comma-separated fields to join on (must all exist
+        /// in both streams), e.g. `--on id` or `--on region,id`
         #[arg(long)]
         on: String,
         /// The kind of join to perform
