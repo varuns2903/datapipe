@@ -297,6 +297,7 @@ fn write_output(
     writer: BufWriter<std::io::StdoutLock>,
     format: OutputFormat,
     pretty: bool,
+    raw: bool,
     result_stream: crate::pipeline::RecordStream,
 ) -> miette::Result<()> {
     match format {
@@ -309,6 +310,12 @@ fn write_output(
                 .map_err(|e| miette::miette!(e.to_string()))
         }
         OutputFormat::Table => crate::io::write_table_stream(writer, result_stream)
+            .map_err(|e| miette::miette!(e.to_string())),
+        // --raw only means anything for JSON output - csv/tsv/table
+        // already render scalar cells unquoted, so there's nothing extra
+        // for --raw to do there, and it's silently ignored rather than
+        // erroring (matching --pretty's same "no-op outside JSON" policy).
+        OutputFormat::Json if raw => crate::io::write_raw_stream(writer, result_stream)
             .map_err(|e| miette::miette!(e.to_string())),
         OutputFormat::Json => crate::io::write_json_stream(writer, result_stream, pretty)
             .map_err(|e| miette::miette!(e.to_string())),
@@ -382,6 +389,7 @@ pub fn run_cli() -> miette::Result<()> {
 
         let result_stream = pipeline.process(records);
         let pretty = spec.pretty || cli.pretty;
+        let raw = spec.raw || cli.raw;
         let format = if spec.out_table {
             OutputFormat::Table
         } else if spec.out_tsv {
@@ -391,7 +399,7 @@ pub fn run_cli() -> miette::Result<()> {
         } else {
             OutputFormat::Json
         };
-        return write_output(writer, format, pretty, result_stream);
+        return write_output(writer, format, pretty, raw, result_stream);
     }
 
     let stdin_handle = stdin();
@@ -423,5 +431,5 @@ pub fn run_cli() -> miette::Result<()> {
     }
 
     let result_stream = pipeline.process(records);
-    write_output(writer, format, cli.pretty, result_stream)
+    write_output(writer, format, cli.pretty, cli.raw, result_stream)
 }

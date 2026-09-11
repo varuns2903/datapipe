@@ -19,8 +19,21 @@ pub struct Cli {
 
     /// Pretty-print JSON output (indented, one object may span multiple
     /// lines). Not valid JSONL - don't pipe this back into another `dp`.
-    #[arg(long, short = 'p', global = true)]
+    #[arg(long, short = 'p', global = true, conflicts_with = "raw")]
     pub pretty: bool,
+
+    /// Print each single-field record's value as a raw scalar instead of
+    /// a JSON object - e.g. `dp sum amount data.jsonl --raw` prints a
+    /// bare `420` instead of `{"sum_amount":420}`, handy for shell
+    /// scripting (`total=$(dp sum amount data.jsonl -r)`). Matches `jq
+    /// -r`: a string value is printed unquoted, everything else (number,
+    /// bool, null, array, object) is printed as its normal JSON form.
+    /// Only applies to JSON output (csv/tsv/table are unaffected) and
+    /// only to records with exactly one field - most naturally
+    /// `count`/`sum`/`avg`/`min`/`max`, but any single-field record
+    /// stream qualifies.
+    #[arg(long, short = 'r', global = true)]
+    pub raw: bool,
 
     #[command(subcommand)]
     pub command: Command,

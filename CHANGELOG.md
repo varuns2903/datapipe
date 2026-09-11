@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `--raw`/`-r`: a global flag that prints a single-field record's value
+  as a raw scalar instead of a JSON object, matching `jq -r` - a string
+  prints unquoted, everything else (number, bool, null, array, object)
+  prints as its normal JSON form. Most useful with a single-value
+  aggregate: `cat data.jsonl | dp sum amount --raw` prints a bare `420`
+  instead of `{"sum_amount":420}`, which is what you actually want for
+  shell scripting (`total=$(cat data.jsonl | dp sum amount -r)`) instead
+  of having to pipe through `jq -r .sum_amount` yourself. Applies to any
+  single-field record stream, not just `count`/`sum`/`avg`/`min`/`max` -
+  e.g. `dp select name --raw` also works. Errors clearly if a record has
+  more than one field, since there's no well-defined raw rendering for
+  that. Ignored (not an error) for `csv`/`tsv`/`table` output, which
+  already render scalar cells unquoted; conflicts with `--pretty`
+  (clap's `conflicts_with`), since the two are mutually exclusive JSON
+  rendering modes. Also available as a pipeline-file setting (`raw =
+  true`), combining with `--raw` the same way `pretty` already does.
+  Implemented as `write_raw_stream()` in `io.rs`. Verified: `io` unit
+  tests (string, number, null, multiple records, multi-field-record
+  error, empty-record error) and CLI integration tests (`sum --raw`,
+  `-r` short flag, string field via `select --raw`, multi-field error,
+  `--raw`/`--pretty` conflict, ignored for `csv`, and a `run` pipeline
+  file with `raw = true`).
 - JSON input also accepts a single pretty-printed JSON object (e.g.
   output from `jq .` or `python -m json.tool`), auto-detected by whether
   its opening `{` is alone on the first line - the standard

@@ -822,6 +822,102 @@ fn test_pretty_flag_indents_json_output() {
 }
 
 #[test]
+fn test_raw_flag_prints_bare_scalar_for_sum() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("sum")
+        .arg("amount")
+        .arg("--raw")
+        .write_stdin("{\"amount\":10}\n{\"amount\":20}\n")
+        .assert()
+        .success()
+        .stdout("30\n");
+}
+
+#[test]
+fn test_raw_short_flag_prints_bare_scalar_for_count() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("-r")
+        .arg("count")
+        .write_stdin("{\"a\":1}\n{\"a\":2}\n")
+        .assert()
+        .success()
+        .stdout("2\n");
+}
+
+#[test]
+fn test_raw_flag_prints_string_unquoted() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("--raw")
+        .arg("select")
+        .arg("name")
+        .write_stdin("{\"name\":\"Alice\"}\n{\"name\":\"Bob\"}\n")
+        .assert()
+        .success()
+        .stdout("Alice\nBob\n");
+}
+
+#[test]
+fn test_raw_flag_errors_on_multi_field_record() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("--raw")
+        .arg("filter")
+        .arg("true")
+        .write_stdin("{\"a\":1,\"b\":2}\n")
+        .assert()
+        .failure();
+}
+
+#[test]
+fn test_raw_and_pretty_conflict() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("--raw")
+        .arg("--pretty")
+        .arg("count")
+        .write_stdin("{\"a\":1}\n")
+        .assert()
+        .failure();
+}
+
+#[test]
+fn test_run_pipeline_file_with_raw_setting() {
+    let dir = tempfile::tempdir().unwrap();
+    let pipeline_path = dir.path().join("pipeline.toml");
+    std::fs::write(
+        &pipeline_path,
+        r#"
+raw = true
+
+[[stages]]
+type = "sum"
+field = "amount"
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("run")
+        .arg(pipeline_path.to_str().unwrap())
+        .write_stdin("{\"amount\":10}\n{\"amount\":20}\n")
+        .assert()
+        .success()
+        .stdout("30\n");
+}
+
+#[test]
+fn test_raw_flag_ignored_for_csv_output() {
+    // --raw only affects JSON output; for `csv` it's a no-op rather than
+    // an error, even though this record has more than one field (which
+    // --raw would otherwise reject for JSON output).
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("--raw")
+        .arg("csv")
+        .write_stdin("{\"a\":1,\"b\":2}\n")
+        .assert()
+        .success()
+        .stdout("a,b\n1,2\n");
+}
+
+#[test]
 fn test_pretty_short_flag() {
     let mut cmd = Command::cargo_bin("dp").unwrap();
     cmd.arg("-p")

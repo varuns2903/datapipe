@@ -35,6 +35,8 @@ pub struct PipelineFile {
     pub out_table: bool,
     #[serde(default)]
     pub pretty: bool,
+    #[serde(default)]
+    pub raw: bool,
     pub stages: Vec<StageSpec>,
 }
 
@@ -216,6 +218,7 @@ mod tests {
             strict = true
             out_csv = true
             pretty = true
+            raw = true
             stages = []
         "#;
         let file = parse(toml).unwrap();
@@ -223,7 +226,17 @@ mod tests {
         assert!(file.strict);
         assert!(file.out_csv);
         assert!(file.pretty);
+        assert!(file.raw);
         assert_eq!(file.stages.len(), 0);
+    }
+
+    #[test]
+    fn raw_defaults_to_false() {
+        let toml = r#"
+            stages = []
+        "#;
+        let file = parse(toml).unwrap();
+        assert!(!file.raw);
     }
 
     #[test]

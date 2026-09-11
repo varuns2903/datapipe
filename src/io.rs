@@ -138,6 +138,38 @@ pub fn write_json_stream<W: Write>(
     Ok(())
 }
 
+// Raw scalar Out (`--raw`)
+//
+// Mirrors `jq -r`: a record's sole field's value is printed unquoted if
+// it's a string, or as its normal JSON form otherwise (number, bool,
+// null, array, object) - so a shell script can capture a single-value
+// aggregate's output directly (`total=$(dp sum amount data.jsonl -r)`)
+// without having to strip JSON object/string syntax itself. Requires
+// each record to have exactly one field, since there's no well-defined
+// "raw" rendering for a multi-field record - most naturally satisfied by
+// `count`/`sum`/`avg`/`min`/`max`'s single-field output, but any
+// single-field record stream qualifies (e.g. `select` on one field).
+pub fn write_raw_stream<W: Write>(
+    mut writer: W,
+    records: impl Iterator<Item = Result<Record>>,
+) -> Result<()> {
+    for record in records {
+        let rec = record?;
+        if rec.len() != 1 {
+            return Err(anyhow::anyhow!(
+                "--raw requires each record to have exactly one field, but got {} field(s)",
+                rec.len()
+            ));
+        }
+        let value = rec.values().next().expect("checked len() == 1 above");
+        match value {
+            Value::String(s) => writeln!(writer, "{s}")?,
+            other => writeln!(writer, "{}", serde_json::to_string(other)?)?,
+        }
+    }
+    Ok(())
+}
+
 // CSV/TSV In
 //
 // Takes an explicit delimiter rather than being two near-duplicate
@@ -617,6 +649,66 @@ mod tests {
         let mut out = Vec::new();
         write_json_stream(&mut out, std::iter::once(Ok(rec)), true).unwrap();
         assert_eq!(String::from_utf8(out).unwrap(), "{\n  \"a\": 1\n}\n");
+    }
+
+    #[test]
+    fn write_raw_stream_prints_string_unquoted() {
+        let mut rec = Record::new();
+        rec.insert("name".to_string(), Value::String("Alice".to_string()));
+        let mut out = Vec::new();
+        write_raw_stream(&mut out, std::iter::once(Ok(rec))).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "Alice\n");
+    }
+
+    #[test]
+    fn write_raw_stream_prints_number_as_is() {
+        let mut rec = Record::new();
+        rec.insert("sum_amount".to_string(), Value::Integer(420));
+        let mut out = Vec::new();
+        write_raw_stream(&mut out, std::iter::once(Ok(rec))).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "420\n");
+    }
+
+    #[test]
+    fn write_raw_stream_prints_null_as_json_null() {
+        let mut rec = Record::new();
+        rec.insert("x".to_string(), Value::Null);
+        let mut out = Vec::new();
+        write_raw_stream(&mut out, std::iter::once(Ok(rec))).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "null\n");
+    }
+
+    #[test]
+    fn write_raw_stream_multiple_records_one_per_line() {
+        let mut rec1 = Record::new();
+        rec1.insert("n".to_string(), Value::Integer(1));
+        let mut rec2 = Record::new();
+        rec2.insert("n".to_string(), Value::Integer(2));
+        let mut out = Vec::new();
+        write_raw_stream(&mut out, vec![Ok(rec1), Ok(rec2)].into_iter()).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "1\n2\n");
+    }
+
+    #[test]
+    fn write_raw_stream_rejects_multi_field_record() {
+        let mut rec = Record::new();
+        rec.insert("a".to_string(), Value::Integer(1));
+        rec.insert("b".to_string(), Value::Integer(2));
+        let mut out = Vec::new();
+        let result = write_raw_stream(&mut out, std::iter::once(Ok(rec)));
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("exactly one field"));
+    }
+
+    #[test]
+    fn write_raw_stream_rejects_empty_record() {
+        let rec = Record::new();
+        let mut out = Vec::new();
+        let result = write_raw_stream(&mut out, std::iter::once(Ok(rec)));
+        assert!(result.is_err());
     }
 
     fn rec(pairs: &[(&str, Value)]) -> Record {
