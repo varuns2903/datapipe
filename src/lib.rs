@@ -124,13 +124,26 @@ fn command_into_stage(command: Command, strict: bool) -> miette::Result<Option<B
                 .map_err(|e| miette::miette!("Invalid join on fields: {e}"))?;
             let f = std::fs::File::open(&file)
                 .map_err(|e| miette::miette!("Failed to open join file: {}", e))?;
-            let reader = BufReader::new(f);
-            // 'static: File/BufReader<File> are fully owned (no borrows), so
+            // A join file this large is exactly the case --merge exists
+            // for, and exactly the case worth shipping compressed - so
+            // `.gz` is decompressed transparently rather than requiring
+            // the caller to pre-decompress to a temp file. `.csv`/JSONL
+            // detection looks at the name with a trailing `.gz` stripped,
+            // so `sales.csv.gz` is still recognized as CSV.
+            let is_gz = file.ends_with(".gz");
+            let base_name = file.strip_suffix(".gz").unwrap_or(&file);
+            let is_csv = base_name.ends_with(".csv");
+            // 'static: every branch here is fully owned (no borrows), so
             // this stream doesn't need to be tied to this function's
             // lifetime - needed for the --merge path below, which stores
             // the pre-sorted right-hand stream inside MergeJoinStage across
             // the whole pipeline's execution, not just this construction step.
-            let join_records: crate::pipeline::RecordStream<'static> = if file.ends_with(".csv") {
+            let reader: Box<dyn std::io::BufRead> = if is_gz {
+                Box::new(BufReader::new(flate2::read::MultiGzDecoder::new(f)))
+            } else {
+                Box::new(BufReader::new(f))
+            };
+            let join_records: crate::pipeline::RecordStream<'static> = if is_csv {
                 Box::new(
                     crate::io::read_csv_stream(reader)
                         .map_err(|e| miette::miette!(e.to_string()))?,

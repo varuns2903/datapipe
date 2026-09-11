@@ -158,6 +158,78 @@ fn test_topn_zero_yields_nothing() {
 }
 
 #[test]
+fn test_join_transparently_decompresses_gz_jsonl_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let right_path = dir.path().join("right.jsonl.gz");
+    let mut encoder = flate2::write::GzEncoder::new(
+        std::fs::File::create(&right_path).unwrap(),
+        flate2::Compression::default(),
+    );
+    std::io::Write::write_all(
+        &mut encoder,
+        b"{\"id\":1,\"name\":\"Alice\"}\n{\"id\":2,\"name\":\"Bob\"}\n",
+    )
+    .unwrap();
+    encoder.finish().unwrap();
+
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("join")
+        .arg(right_path.to_str().unwrap())
+        .arg("--on")
+        .arg("id")
+        .write_stdin("{\"id\":1,\"order\":100}\n{\"id\":2,\"order\":200}\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Alice"))
+        .stdout(predicate::str::contains("Bob"));
+}
+
+#[test]
+fn test_join_transparently_decompresses_gz_csv_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let right_path = dir.path().join("right.csv.gz");
+    let mut encoder = flate2::write::GzEncoder::new(
+        std::fs::File::create(&right_path).unwrap(),
+        flate2::Compression::default(),
+    );
+    std::io::Write::write_all(&mut encoder, b"id,name\n1,Carol\n").unwrap();
+    encoder.finish().unwrap();
+
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("join")
+        .arg(right_path.to_str().unwrap())
+        .arg("--on")
+        .arg("id")
+        .write_stdin("{\"id\":1,\"order\":100}\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Carol"));
+}
+
+#[test]
+fn test_join_merge_transparently_decompresses_gz_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let right_path = dir.path().join("right.jsonl.gz");
+    let mut encoder = flate2::write::GzEncoder::new(
+        std::fs::File::create(&right_path).unwrap(),
+        flate2::Compression::default(),
+    );
+    std::io::Write::write_all(&mut encoder, b"{\"id\":1,\"name\":\"Alice\"}\n").unwrap();
+    encoder.finish().unwrap();
+
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("join")
+        .arg(right_path.to_str().unwrap())
+        .arg("--on")
+        .arg("id")
+        .arg("--merge")
+        .write_stdin("{\"id\":1,\"order\":100}\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Alice"));
+}
+
+#[test]
 fn test_csv_input_preserves_nan_literal_as_string() {
     let mut cmd = Command::cargo_bin("dp").unwrap();
     cmd.arg("--in-csv")

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `join <file>` transparently gzip-decompresses `<file>` when it ends in
+  `.gz` (e.g. `sales.csv.gz`, `lookup.jsonl.gz`), for both the default
+  hash join and `--merge`. A large join file is exactly the scenario
+  `--merge` already targets, and exactly the kind of file worth shipping
+  compressed - previously this needed pre-decompressing to a temp file
+  by hand. `.csv`/JSONL format detection looks at the filename with a
+  trailing `.gz` stripped, so `sales.csv.gz` is still recognized as CSV.
+  Added `flate2` (pure-Rust `miniz_oxide` backend, no C toolchain
+  dependency, so it doesn't complicate the cross-platform release
+  build). Verified with CLI integration tests covering `.jsonl.gz`,
+  `.csv.gz`, and `--merge` with a `.gz` file.
+
 ### Fixed
 - `--in-csv` no longer corrupts a field whose value is literally the text
   `"NaN"`, `"inf"`, `"Infinity"`, or `"-inf"` (any case). Rust's
