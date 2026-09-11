@@ -12,14 +12,8 @@ use clap::{CommandFactory, Parser};
 use cli::{Cli, Command};
 use pipeline::{Pipeline, Stage};
 use stages::*;
-use std::io::{stdin, stdout, BufReader, BufWriter, Write};
+use std::io::{stdin, stdout, BufRead, BufReader, BufWriter, Write};
 
-/// Builds the stage for a single `Command`, if it represents a pipeline
-/// stage at all. Returns `Ok(None)` for `Csv`/`Table`/`Inspect`, which don't add a
-/// stage (they're handled by the caller as output-format/no-op markers).
-/// Shared by both direct CLI dispatch and `run`'s multi-stage pipeline
-/// files, so there is exactly one place that knows how to turn a `Command`
-/// into a `Stage`.
 /// Parses a `filter`/`map` expression, converting the parser's error into
 /// a `miette`-rendered diagnostic. Shared by every place an expression
 /// string needs to become an `Expr` AST, so there's exactly one spot that
@@ -34,6 +28,12 @@ fn parse_expr(expression: &str) -> miette::Result<crate::expr::Expr> {
     })
 }
 
+/// Builds the stage for a single `Command`, if it represents a pipeline
+/// stage at all. Returns `Ok(None)` for `Csv`/`Table`/`Inspect`, which don't add a
+/// stage (they're handled by the caller as output-format/no-op markers).
+/// Shared by both direct CLI dispatch and `run`'s multi-stage pipeline
+/// files, so there is exactly one place that knows how to turn a `Command`
+/// into a `Stage`.
 fn command_into_stage(command: Command, strict: bool) -> miette::Result<Option<Box<dyn Stage>>> {
     let stage: Box<dyn Stage> = match command {
         Command::Filter { expression } => {
@@ -212,10 +212,33 @@ fn apply_strict_policy(
     }
 }
 
+/// Gzip's two-byte magic number (RFC 1952). Sniffed rather than requiring
+/// a `--gzip` flag: stdin has no filename to check an extension against,
+/// and these two bytes can't start a valid JSONL/CSV stream (0x1f is a
+/// control character), so detection is unambiguous.
+const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
+
+/// Peeks at stdin's first two bytes (without consuming them - `fill_buf`
+/// only fills the internal buffer) and transparently gzip-decompresses
+/// the stream if they match the gzip magic number. Shared by both direct
+/// CLI dispatch and `run`, so `cat data.jsonl.gz | dp count` and
+/// `cat data.jsonl.gz | dp run pipeline.toml` both just work.
+fn maybe_decompress_stdin(
+    mut reader: BufReader<std::io::StdinLock>,
+) -> Box<dyn std::io::BufRead + '_> {
+    let looks_gzipped = matches!(reader.fill_buf(), Ok(buf) if buf.starts_with(&GZIP_MAGIC));
+    if looks_gzipped {
+        Box::new(BufReader::new(flate2::bufread::MultiGzDecoder::new(reader)))
+    } else {
+        Box::new(reader)
+    }
+}
+
 fn read_input(
     in_csv: bool,
     reader: BufReader<std::io::StdinLock>,
 ) -> miette::Result<crate::pipeline::RecordStream> {
+    let reader = maybe_decompress_stdin(reader);
     if in_csv {
         Ok(Box::new(
             crate::io::read_csv_stream(reader).map_err(|e| miette::miette!(e.to_string()))?,

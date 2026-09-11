@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Main stdin input is now transparently gzip-decompressed when detected,
+  for both the direct CLI (`cat data.jsonl.gz | dp count`) and `run`
+  (`cat data.jsonl.gz | dp run pipeline.toml`), in both JSONL and
+  `--in-csv` mode. Detection sniffs the gzip magic number (the first two
+  bytes) via `BufReader::fill_buf` without consuming them, rather than
+  requiring an explicit `--gzip` flag - stdin has no filename to check an
+  extension against, and those two bytes can't start a valid JSONL/CSV
+  stream, so detection is unambiguous. Implemented as
+  `maybe_decompress_stdin()`, shared by `read_input` (used by both the
+  direct-command and `run` code paths). Uncompressed input is completely
+  unaffected - `fill_buf` peeks without consuming, so the byte stream is
+  identical either way once the check is done. Verified with integration
+  tests covering gzipped JSONL, gzipped CSV, gzipped input through `run`,
+  and confirming plain uncompressed input still works.
 - `join <file>` transparently gzip-decompresses `<file>` when it ends in
   `.gz` (e.g. `sales.csv.gz`, `lookup.jsonl.gz`), for both the default
   hash join and `--merge`. A large join file is exactly the scenario

@@ -157,6 +157,66 @@ fn test_topn_zero_yields_nothing() {
         .stdout("");
 }
 
+fn gzip_bytes(data: &[u8]) -> Vec<u8> {
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    std::io::Write::write_all(&mut encoder, data).unwrap();
+    encoder.finish().unwrap()
+}
+
+#[test]
+fn test_stdin_gzip_is_auto_detected_for_jsonl() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("count")
+        .write_stdin(gzip_bytes(b"{\"a\":1}\n{\"a\":2}\n{\"a\":3}\n"))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"count\":3"));
+}
+
+#[test]
+fn test_stdin_gzip_is_auto_detected_for_csv() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("--in-csv")
+        .arg("filter")
+        .arg("true")
+        .write_stdin(gzip_bytes(b"a,b\n1,2\n"))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"a\":1,\"b\":2"));
+}
+
+#[test]
+fn test_stdin_gzip_is_auto_detected_through_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let pipeline_path = dir.path().join("pipeline.toml");
+    std::fs::write(
+        &pipeline_path,
+        r#"
+[[stages]]
+type = "count"
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("run")
+        .arg(pipeline_path.to_str().unwrap())
+        .write_stdin(gzip_bytes(b"{\"a\":1}\n{\"a\":2}\n"))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"count\":2"));
+}
+
+#[test]
+fn test_stdin_uncompressed_still_works() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("count")
+        .write_stdin("{\"a\":1}\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"count\":1"));
+}
+
 #[test]
 fn test_join_transparently_decompresses_gz_jsonl_file() {
     let dir = tempfile::tempdir().unwrap();
