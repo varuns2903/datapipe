@@ -164,6 +164,38 @@ fn gzip_bytes(data: &[u8]) -> Vec<u8> {
 }
 
 #[test]
+fn test_json_array_input_is_auto_detected() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("count")
+        .write_stdin("[{\"a\":1},{\"a\":2},{\"a\":3}]")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"count\":3"));
+}
+
+#[test]
+fn test_json_array_input_pretty_printed() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("filter")
+        .arg("true")
+        .write_stdin("[\n  {\"a\": 1},\n  {\"a\": 2}\n]\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"a\":1"))
+        .stdout(predicate::str::contains("\"a\":2"));
+}
+
+#[test]
+fn test_json_array_input_combined_with_gzip() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("count")
+        .write_stdin(gzip_bytes(b"[{\"a\":1},{\"a\":2}]"))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"count\":2"));
+}
+
+#[test]
 fn test_in_tsv_reads_tab_separated_input() {
     let mut cmd = Command::cargo_bin("dp").unwrap();
     cmd.arg("--in-tsv")

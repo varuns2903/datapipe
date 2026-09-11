@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- JSON input now also accepts a single JSON array (`[{...}, {...}]`) as
+  an alternative to JSONL, auto-detected by whether the first
+  non-whitespace byte is `[` or `{` - no flag needed, and works whether
+  the array is minified or pretty-printed across multiple lines.
+  Composes with the gzip auto-detection added earlier (a gzipped JSON
+  array works too). Unlike JSONL, this path buffers the whole array into
+  memory before yielding any records, since a JSON array can't be
+  confirmed valid - or even know where it ends - until the closing `]`
+  is read; that's an inherent property of the syntax, not a `dp`-specific
+  shortcut, and is documented as such. `read_json_stream`'s return type
+  changed from `impl Iterator` to `Box<dyn Iterator>` to accommodate the
+  two different concrete iterator types the two code paths now produce.
+  Only applies to JSON input, not `--in-csv`/`--in-tsv`. Verified: `io`
+  unit tests (minified array, pretty-printed with leading whitespace,
+  malformed element, empty array) and CLI integration tests (array
+  input, pretty-printed array, array combined with gzip).
 - TSV support, mirroring CSV: `--in-tsv` (global flag, conflicts with
   `--in-csv`) reads tab-separated input, and the `tsv` subcommand outputs
   tab-separated data, both with the exact same type inference as CSV

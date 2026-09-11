@@ -149,7 +149,7 @@ fn command_into_stage(command: Command, strict: bool) -> miette::Result<Option<B
                         .map_err(|e| miette::miette!(e.to_string()))?,
                 )
             } else {
-                Box::new(crate::io::read_json_stream(reader))
+                crate::io::read_json_stream(reader)
             };
 
             if merge {
@@ -255,7 +255,7 @@ fn read_input(
             crate::io::read_csv_stream(reader, crate::io::TSV_DELIMITER)
                 .map_err(|e| miette::miette!(e.to_string()))?,
         )),
-        InputFormat::Json => Ok(Box::new(crate::io::read_json_stream(reader))),
+        InputFormat::Json => Ok(crate::io::read_json_stream(reader)),
     }
 }
 

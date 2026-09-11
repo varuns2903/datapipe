@@ -5,6 +5,18 @@ use std::io::{BufRead, Write};
 pub const CSV_DELIMITER: u8 = b',';
 pub const TSV_DELIMITER: u8 = b'\t';
 
+/// Peeks at a reader's next non-whitespace byte (without consuming
+/// anything - `fill_buf` only fills the internal buffer) to tell a JSON
+/// array (`[{...}, {...}]`) apart from JSONL (one `{...}` per line):
+/// the two formats are unambiguous by their very first non-whitespace
+/// character, so no explicit flag is needed to pick between them.
+fn looks_like_json_array<R: BufRead>(reader: &mut R) -> bool {
+    matches!(
+        reader.fill_buf(),
+        Ok(buf) if buf.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'[')
+    )
+}
+
 // JSON In
 //
 // Parses one JSON object per line (true JSONL semantics) rather than treating
@@ -12,10 +24,27 @@ pub const TSV_DELIMITER: u8 = b'\t';
 // malformed line only affects that line - unlike `serde_json::Deserializer`'s
 // streaming parser, which stops yielding entirely after the first parse
 // error, silently dropping every valid record that follows it.
+//
+// Also transparently accepts a single JSON array as an alternative to
+// JSONL, auto-detected via `looks_like_json_array`. Unlike JSONL, an
+// array must be fully parsed to even confirm it's valid JSON (the closing
+// `]` and overall structure can't be known until the whole thing is
+// read), so this path buffers the whole array into memory rather than
+// streaming record-by-record - an inherent property of the array syntax,
+// not a limitation specific to `dp`.
 pub fn read_json_stream<'a, R: BufRead + 'a>(
-    reader: R,
-) -> impl Iterator<Item = Result<Record>> + 'a {
-    reader.lines().enumerate().filter_map(|(i, line_res)| {
+    mut reader: R,
+) -> Box<dyn Iterator<Item = Result<Record>> + 'a> {
+    if looks_like_json_array(&mut reader) {
+        return match serde_json::from_reader::<_, Vec<Record>>(reader)
+            .map_err(|e| anyhow::anyhow!("JSON array parse error: {e}"))
+        {
+            Ok(records) => Box::new(records.into_iter().map(Ok)),
+            Err(e) => Box::new(std::iter::once(Err(e))),
+        };
+    }
+
+    Box::new(reader.lines().enumerate().filter_map(|(i, line_res)| {
         let line_no = i + 1;
         let line = match line_res {
             Ok(l) => l,
@@ -28,7 +57,7 @@ pub fn read_json_stream<'a, R: BufRead + 'a>(
             serde_json::from_str::<Record>(&line)
                 .map_err(|e| anyhow::anyhow!("JSON parse error on line {line_no}: {e}")),
         )
-    })
+    }))
 }
 
 // JSON Out
@@ -289,6 +318,45 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert!(results[0].is_ok());
         assert!(results[1].is_ok());
+    }
+
+    #[test]
+    fn read_json_stream_accepts_a_json_array_minified() {
+        let results = read_all(r#"[{"a":1},{"a":2},{"a":3}]"#);
+        assert_eq!(results.len(), 3);
+        for r in &results {
+            assert!(r.is_ok());
+        }
+        assert_eq!(
+            results[1].as_ref().unwrap().get("a"),
+            Some(&Value::Integer(2))
+        );
+    }
+
+    #[test]
+    fn read_json_stream_accepts_a_json_array_pretty_printed_and_leading_whitespace() {
+        let results = read_all("  \n[\n  {\"a\": 1},\n  {\"a\": 2}\n]\n");
+        assert_eq!(results.len(), 2);
+        assert!(results[0].is_ok());
+        assert!(results[1].is_ok());
+    }
+
+    #[test]
+    fn read_json_stream_json_array_with_malformed_element_yields_one_error() {
+        let results = read_all(r#"[{"a":1}, not json]"#);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_err());
+        assert!(results[0]
+            .as_ref()
+            .unwrap_err()
+            .to_string()
+            .contains("JSON array parse error"));
+    }
+
+    #[test]
+    fn read_json_stream_empty_array_yields_nothing() {
+        let results = read_all("[]");
+        assert_eq!(results.len(), 0);
     }
 
     #[test]
