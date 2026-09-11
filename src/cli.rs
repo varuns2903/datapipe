@@ -52,6 +52,12 @@ pub enum Command {
     /// ascending; append `:desc` (or `:asc`) to override, e.g.
     /// `sort age:desc,name`.
     Sort { fields: String },
+    /// Keep only the top N records by one or more comma-separated fields
+    /// (same spec as `sort`, e.g. `score:desc`). Unlike `sort | limit`,
+    /// this never buffers more than N records - a bounded max-heap
+    /// instead of a full external sort.
+    #[command(name = "topn")]
+    TopN { fields: String, n: usize },
     /// Keep only the first record for each distinct combination of one or
     /// more comma-separated fields
     Unique { fields: String },

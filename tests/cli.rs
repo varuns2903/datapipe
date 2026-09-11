@@ -110,6 +110,54 @@ fn test_strict_mode_aborts_join_merge_on_malformed_line() {
 }
 
 #[test]
+fn test_topn_matches_sort_then_limit() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("topn")
+        .arg("score:desc")
+        .arg("3")
+        .write_stdin("{\"score\":5}\n{\"score\":9}\n{\"score\":1}\n{\"score\":7}\n{\"score\":3}\n")
+        .assert()
+        .success()
+        .stdout("{\"score\":9}\n{\"score\":7}\n{\"score\":5}\n");
+}
+
+#[test]
+fn test_run_pipeline_file_with_topn_stage() {
+    let dir = tempfile::tempdir().unwrap();
+    let pipeline_path = dir.path().join("pipeline.toml");
+    std::fs::write(
+        &pipeline_path,
+        r#"
+[[stages]]
+type = "topn"
+fields = "score:desc"
+n = 2
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("run")
+        .arg(pipeline_path.to_str().unwrap())
+        .write_stdin("{\"score\":5}\n{\"score\":9}\n{\"score\":1}\n")
+        .assert()
+        .success()
+        .stdout("{\"score\":9}\n{\"score\":5}\n");
+}
+
+#[test]
+fn test_topn_zero_yields_nothing() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("topn")
+        .arg("score")
+        .arg("0")
+        .write_stdin("{\"score\":1}\n")
+        .assert()
+        .success()
+        .stdout("");
+}
+
+#[test]
 fn test_sort_multi_field() {
     let mut cmd = Command::cargo_bin("dp").unwrap();
     cmd.arg("sort")

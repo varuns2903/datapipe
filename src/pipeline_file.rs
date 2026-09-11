@@ -60,6 +60,11 @@ pub enum StageSpec {
     Sort {
         fields: String,
     },
+    #[serde(rename = "topn")]
+    TopN {
+        fields: String,
+        n: usize,
+    },
     Unique {
         fields: String,
     },
@@ -142,6 +147,7 @@ pub fn into_command(spec: StageSpec) -> Command {
         StageSpec::Select { fields, exclude } => Command::Select { fields, exclude },
         StageSpec::Limit { max } => Command::Limit { max },
         StageSpec::Sort { fields } => Command::Sort { fields },
+        StageSpec::TopN { fields, n } => Command::TopN { fields, n },
         StageSpec::Unique { fields } => Command::Unique { fields },
         StageSpec::Dedup => Command::Dedup,
         StageSpec::Count => Command::Count,
@@ -263,6 +269,31 @@ mod tests {
             StageSpec::Sort { fields } => assert_eq!(fields, "country,age:desc"),
             _ => panic!("expected Sort stage"),
         }
+    }
+
+    #[test]
+    fn parses_topn_stage() {
+        let toml = r#"
+            [[stages]]
+            type = "topn"
+            fields = "score:desc"
+            n = 5
+        "#;
+        let file = parse(toml).unwrap();
+        match &file.stages[0] {
+            StageSpec::TopN { fields, n } => {
+                assert_eq!(fields, "score:desc");
+                assert_eq!(*n, 5);
+            }
+            _ => panic!("expected TopN stage"),
+        }
+        assert!(matches!(
+            into_command(StageSpec::TopN {
+                fields: "score:desc".to_string(),
+                n: 5
+            }),
+            Command::TopN { .. }
+        ));
     }
 
     #[test]

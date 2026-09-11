@@ -438,6 +438,81 @@ pub(crate) fn external_sort<'a>(
     })
 }
 
+/// Ordered the same way `cmp_by_sort_fields` orders records (not reversed,
+/// unlike `HeapItem`), so a plain `BinaryHeap`'s max is exactly the
+/// "worst" record currently being kept - the one to evict first when a
+/// better candidate arrives.
+struct TopNItem {
+    record: Record,
+    fields: std::rc::Rc<Vec<(String, bool)>>,
+}
+
+impl PartialEq for TopNItem {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+impl Eq for TopNItem {}
+impl PartialOrd for TopNItem {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for TopNItem {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        cmp_by_sort_fields(&self.record, &other.record, &self.fields)
+    }
+}
+
+/// Keeps only the top `n` records by a `sort`-style field spec, without
+/// buffering or sorting the whole stream: a bounded max-heap of at most
+/// `n` items is maintained (O(n log k) time, O(k) memory where k = min(n,
+/// stream length)), evicting the current worst-kept record whenever a
+/// better one arrives once the heap is full. Equivalent to `sort <fields>
+/// | limit <n>` in result, but doesn't need `sort`'s external-merge
+/// temp-file spilling since it never holds more than `n` records at once.
+pub struct TopNStage {
+    pub fields: Vec<(String, bool)>,
+    pub n: usize,
+}
+
+impl Stage for TopNStage {
+    fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
+        let fields = std::rc::Rc::new(self.fields.clone());
+        let n = self.n;
+        let mut heap: std::collections::BinaryHeap<TopNItem> =
+            std::collections::BinaryHeap::with_capacity(n.saturating_add(1));
+
+        for res in input {
+            let record = match res {
+                Ok(rec) => rec,
+                Err(e) => return Box::new(std::iter::once(Err(e))),
+            };
+            if n == 0 {
+                continue;
+            }
+            if heap.len() < n {
+                heap.push(TopNItem {
+                    record,
+                    fields: std::rc::Rc::clone(&fields),
+                });
+            } else if let Some(worst) = heap.peek() {
+                if cmp_by_sort_fields(&record, &worst.record, &fields) == std::cmp::Ordering::Less {
+                    heap.pop();
+                    heap.push(TopNItem {
+                        record,
+                        fields: std::rc::Rc::clone(&fields),
+                    });
+                }
+            }
+        }
+
+        let mut items: Vec<Record> = heap.into_iter().map(|item| item.record).collect();
+        items.sort_by(|a, b| cmp_by_sort_fields(a, b, &fields));
+        Box::new(items.into_iter().map(Ok))
+    }
+}
+
 pub struct ExplodeStage {
     pub field: String,
 }
@@ -1627,6 +1702,114 @@ mod tests {
                 (Value::Integer(1), Value::Integer(1)),
             ]
         );
+    }
+
+    #[test]
+    fn topn_matches_sort_then_limit_descending() {
+        let input = stream(vec![
+            rec(&[("score", Value::Integer(5))]),
+            rec(&[("score", Value::Integer(9))]),
+            rec(&[("score", Value::Integer(1))]),
+            rec(&[("score", Value::Integer(7))]),
+            rec(&[("score", Value::Integer(3))]),
+        ]);
+        let stage = TopNStage {
+            fields: vec![("score".to_string(), true)],
+            n: 3,
+        };
+        let out = collect_ok(stage.process(input));
+        let values: Vec<_> = out
+            .iter()
+            .map(|r| r.get("score").cloned().unwrap())
+            .collect();
+        assert_eq!(
+            values,
+            vec![Value::Integer(9), Value::Integer(7), Value::Integer(5)]
+        );
+    }
+
+    #[test]
+    fn topn_matches_sort_then_limit_ascending() {
+        let input = stream(vec![
+            rec(&[("score", Value::Integer(5))]),
+            rec(&[("score", Value::Integer(9))]),
+            rec(&[("score", Value::Integer(1))]),
+        ]);
+        let stage = TopNStage {
+            fields: vec![("score".to_string(), false)],
+            n: 2,
+        };
+        let out = collect_ok(stage.process(input));
+        let values: Vec<_> = out
+            .iter()
+            .map(|r| r.get("score").cloned().unwrap())
+            .collect();
+        assert_eq!(values, vec![Value::Integer(1), Value::Integer(5)]);
+    }
+
+    #[test]
+    fn topn_n_greater_than_stream_length_returns_everything_sorted() {
+        let input = stream(vec![
+            rec(&[("score", Value::Integer(2))]),
+            rec(&[("score", Value::Integer(1))]),
+        ]);
+        let stage = TopNStage {
+            fields: vec![("score".to_string(), false)],
+            n: 10,
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].get("score"), Some(&Value::Integer(1)));
+        assert_eq!(out[1].get("score"), Some(&Value::Integer(2)));
+    }
+
+    #[test]
+    fn topn_zero_yields_nothing() {
+        let input = stream(vec![rec(&[("score", Value::Integer(1))])]);
+        let stage = TopNStage {
+            fields: vec![("score".to_string(), false)],
+            n: 0,
+        };
+        assert_eq!(collect_ok(stage.process(input)).len(), 0);
+    }
+
+    #[test]
+    fn topn_multi_field() {
+        let input = stream(vec![
+            rec(&[("a", Value::Integer(1)), ("b", Value::Integer(3))]),
+            rec(&[("a", Value::Integer(1)), ("b", Value::Integer(1))]),
+            rec(&[("a", Value::Integer(2)), ("b", Value::Integer(0))]),
+        ]);
+        let stage = TopNStage {
+            fields: vec![("a".to_string(), true), ("b".to_string(), true)],
+            n: 2,
+        };
+        let out = collect_ok(stage.process(input));
+        let pairs: Vec<_> = out
+            .iter()
+            .map(|r| (r.get("a").cloned().unwrap(), r.get("b").cloned().unwrap()))
+            .collect();
+        assert_eq!(
+            pairs,
+            vec![
+                (Value::Integer(2), Value::Integer(0)),
+                (Value::Integer(1), Value::Integer(3)),
+            ]
+        );
+    }
+
+    #[test]
+    fn topn_propagates_error_instead_of_ignoring_it() {
+        let input = stream_with_error(
+            vec![rec(&[("n", Value::Integer(1))])],
+            vec![rec(&[("n", Value::Integer(2))])],
+        );
+        let stage = TopNStage {
+            fields: vec![("n".to_string(), false)],
+            n: 5,
+        };
+        let mut out = stage.process(input);
+        assert!(out.next().unwrap().is_err());
     }
 
     #[test]

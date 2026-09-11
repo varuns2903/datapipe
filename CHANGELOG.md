@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `topn <fields> <n>`: keeps only the top `n` records by a `sort`-style
+  field spec (same syntax, e.g. `score:desc`), without buffering or
+  sorting the whole stream. Maintains a bounded max-heap of at most `n`
+  items (O(n log k) time, O(k) memory where `k = min(n, stream length)`),
+  evicting the current worst-kept record whenever a better candidate
+  arrives once the heap is full - unlike `sort <fields> | limit <n>`,
+  which fully sorts (spilling to temp files) before truncating. Produces
+  identical output to that pipeline, just without the unnecessary work
+  and disk I/O when only a handful of extremes are needed out of a huge
+  stream. Implemented as `TopNStage`/`TopNItem`, reusing `sort`'s
+  `cmp_by_sort_fields()` comparator and `parse_sort_spec()` parsing.
+  Available in pipeline files as `type = "topn"` (`fields` + `n`).
+  Verified: unit tests against `sort | limit` for both ascending and
+  descending single/multi-field specs, `n` larger than the stream,
+  `n = 0`, and error propagation; CLI and pipeline-file integration
+  tests.
 - `map`: repeatable `--set FIELD=EXPRESSION` for computing multiple fields
   in one pass, in addition to the existing primary `<field> <expression>`
   positional pair (fully backward compatible - the primary assignment

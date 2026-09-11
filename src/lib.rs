@@ -62,6 +62,11 @@ fn command_into_stage(command: Command, strict: bool) -> miette::Result<Option<B
                 .map_err(|e| miette::miette!("Invalid sort spec: {e}"))?;
             Box::new(SortStage { fields })
         }
+        Command::TopN { fields, n } => {
+            let fields = stages::parse_sort_spec(&fields)
+                .map_err(|e| miette::miette!("Invalid sort spec: {e}"))?;
+            Box::new(TopNStage { fields, n })
+        }
         Command::Unique { fields } => {
             let fields = stages::parse_field_list(&fields)
                 .map_err(|e| miette::miette!("Invalid unique fields: {e}"))?;

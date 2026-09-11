@@ -27,6 +27,6 @@ fields = ["name", "age"]
 cat users.jsonl | dp run pipeline.toml
 ```
 
-Each `[[stages]]` table's `type` corresponds to a subcommand (`filter`, `search`, `select`, `sort`, `unique`, `dedup`, `count`, `sum`, `avg`, `min`, `max`, `schema`, `stats`, `group`, `freq`, `explode`, `rename`, `flatten`, `sample`, `map`, `join`) with the same field names as that subcommand's flags/arguments — e.g. `sort`/`unique` take a comma-separated `fields` string (`sort` fields may carry a `:desc`/`:asc` suffix, e.g. `"age:desc"`), `group`/`join` take a comma-separated `by`/`on` string, and `join` also takes `file` and an optional `join_type` (`"left"` | `"inner"` | `"right"` | `"full"`, defaults to `"left"`).
+Each `[[stages]]` table's `type` corresponds to a subcommand (`filter`, `search`, `select`, `sort`, `topn`, `unique`, `dedup`, `count`, `sum`, `avg`, `min`, `max`, `schema`, `stats`, `group`, `freq`, `explode`, `rename`, `flatten`, `sample`, `map`, `join`) with the same field names as that subcommand's flags/arguments — e.g. `sort`/`topn`/`unique` take a comma-separated `fields` string (`sort`/`topn` fields may carry a `:desc`/`:asc` suffix, e.g. `"age:desc"`; `topn` also takes `n`), `group`/`join` take a comma-separated `by`/`on` string, and `join` also takes `file` and an optional `join_type` (`"left"` | `"inner"` | `"right"` | `"full"`, defaults to `"left"`).
 
 Format/utility commands (`csv`, `table`, `completions`, `man`, `run` itself) aren't valid `[[stages]]` entries — use the top-level `out_csv`/`out_table` settings for those output formats instead.
