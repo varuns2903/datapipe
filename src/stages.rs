@@ -334,10 +334,10 @@ pub(crate) fn external_sort<'a>(
     loop {
         let mut chunk = Vec::with_capacity(50_000);
         for _ in 0..50_000 {
-            if let Some(Ok(rec)) = input.next() {
-                chunk.push(rec);
-            } else {
-                break;
+            match input.next() {
+                Some(Ok(rec)) => chunk.push(rec),
+                Some(Err(e)) => return Box::new(std::iter::once(Err(e))),
+                None => break,
             }
         }
         if chunk.is_empty() {

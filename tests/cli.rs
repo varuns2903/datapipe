@@ -52,6 +52,35 @@ fn test_strict_mode_aborts_on_malformed_line() {
 }
 
 #[test]
+fn test_strict_mode_aborts_sort_on_malformed_line() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("--strict")
+        .arg("sort")
+        .arg("a")
+        .write_stdin("{\"a\":1}\nnot json\n{\"a\":2}\n")
+        .assert()
+        .failure();
+}
+
+#[test]
+fn test_strict_mode_aborts_join_merge_on_malformed_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let join_file = dir.path().join("bad.jsonl");
+    std::fs::write(&join_file, "{\"id\":1,\"x\":\"a\"}\nnot json\n{\"id\":2,\"x\":\"b\"}\n").unwrap();
+
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("--strict")
+        .arg("join")
+        .arg(join_file.to_str().unwrap())
+        .arg("--on")
+        .arg("id")
+        .arg("--merge")
+        .write_stdin("{\"id\":1}\n{\"id\":2}\n")
+        .assert()
+        .failure();
+}
+
+#[test]
 fn test_completions_registers_actual_binary_name() {
     for shell in ["bash", "zsh", "fish", "powershell", "elvish"] {
         let mut cmd = Command::cargo_bin("dp").unwrap();

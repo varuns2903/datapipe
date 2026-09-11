@@ -34,12 +34,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sides, empty-stream edges on both sides, and at a 60,000-record scale
   that exercises the external sort's 50k-record chunk boundary.
 
-### Known limitation
-- `external_sort` (used by `sort` and `join --merge`) currently drops
-  malformed records silently instead of honoring `--strict`, unlike every
-  other stage in the pipeline. This was discovered while building
-  `join --merge` (both share the same external-sort code path) and is
-  being tracked as a follow-up fix rather than folded into this change.
+### Fixed
+- `external_sort` (used by `sort` and `join --merge`) silently dropped
+  malformed records instead of honoring `--strict`, unlike every other
+  stage in the pipeline. The chunk-filling loop treated `Some(Err(_))` the
+  same as `None` (end of input), so a parse error partway through the
+  stream silently truncated the sort instead of aborting under `--strict`.
+  Fixed to distinguish the two cases and abort with the error, matching
+  the abort-on-error convention used by every other eager stage
+  (`sum`/`avg`/`min`/`max`/`group`/`schema`). Discovered while building
+  `join --merge` above (both share the same external-sort code path).
 
 ### Added
 - Date/time functions in `filter`/`map` expressions: `to_unix(a)` parses an
