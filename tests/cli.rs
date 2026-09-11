@@ -66,7 +66,11 @@ fn test_strict_mode_aborts_sort_on_malformed_line() {
 fn test_strict_mode_aborts_join_merge_on_malformed_line() {
     let dir = tempfile::tempdir().unwrap();
     let join_file = dir.path().join("bad.jsonl");
-    std::fs::write(&join_file, "{\"id\":1,\"x\":\"a\"}\nnot json\n{\"id\":2,\"x\":\"b\"}\n").unwrap();
+    std::fs::write(
+        &join_file,
+        "{\"id\":1,\"x\":\"a\"}\nnot json\n{\"id\":2,\"x\":\"b\"}\n",
+    )
+    .unwrap();
 
     let mut cmd = Command::cargo_bin("dp").unwrap();
     cmd.arg("--strict")
