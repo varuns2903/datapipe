@@ -983,6 +983,43 @@ fn test_stats_command_computes_mean_and_stddev() {
 }
 
 #[test]
+fn test_stats_command_computes_percentiles() {
+    let stdin: String = (1..=100).map(|i| format!("{{\"n\":{}}}\n", i)).collect();
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    let output = cmd
+        .arg("stats")
+        .write_stdin(stdin)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(output).unwrap();
+    let row: serde_json::Value = stdout
+        .lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .find(|r| r["field"] == "n")
+        .unwrap();
+    // Linear-interpolation percentiles for 1..=100 aren't exact in f64,
+    // so compare approximately rather than matching a literal string.
+    assert!((row["median"].as_f64().unwrap() - 50.5).abs() < 1e-9);
+    assert!((row["p90"].as_f64().unwrap() - 90.1).abs() < 1e-9);
+    assert!((row["p99"].as_f64().unwrap() - 99.01).abs() < 1e-9);
+}
+
+#[test]
+fn test_stats_percentiles_null_for_non_numeric_field() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("stats")
+        .write_stdin("{\"name\":\"Alice\"}\n{\"name\":\"Bob\"}\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"median\":null"))
+        .stdout(predicate::str::contains("\"p90\":null"))
+        .stdout(predicate::str::contains("\"p99\":null"));
+}
+
+#[test]
 fn test_freq_command_sorts_by_count_with_limit() {
     let mut cmd = Command::cargo_bin("dp").unwrap();
     cmd.arg("freq")

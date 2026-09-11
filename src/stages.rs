@@ -730,6 +730,32 @@ struct FieldStats {
     /// the README rather than bounded, since typical field cardinality is
     /// small relative to stream length.
     distinct: std::collections::HashSet<String>,
+    /// Every numeric value seen for this field, kept (unlike `sum`/`sum_sq`,
+    /// which only need a running total) because computing an exact
+    /// percentile requires the full sorted set of values - there's no
+    /// incremental/O(1)-memory way to do it. This makes `stats`'s memory
+    /// usage proportional to the number of *numeric* values seen for a
+    /// field, not just its distinct-value count - a real, larger
+    /// commitment than the rest of `stats`, documented as such in the
+    /// README rather than left implicit.
+    numeric_values: Vec<f64>,
+}
+
+/// Linear-interpolation percentile (the convention numpy/pandas default
+/// to), given a slice already sorted ascending. `p` is in `[0, 100]`.
+fn percentile(sorted: &[f64], p: f64) -> f64 {
+    if sorted.len() == 1 {
+        return sorted[0];
+    }
+    let rank = (p / 100.0) * (sorted.len() - 1) as f64;
+    let lo = rank.floor() as usize;
+    let hi = rank.ceil() as usize;
+    if lo == hi {
+        sorted[lo]
+    } else {
+        let frac = rank - lo as f64;
+        sorted[lo] * (1.0 - frac) + sorted[hi] * frac
+    }
 }
 
 pub struct StatsStage;
@@ -753,11 +779,13 @@ impl Stage for StatsStage {
                         entry.numeric_count += 1;
                         entry.sum += *i as f64;
                         entry.sum_sq += (*i as f64).powi(2);
+                        entry.numeric_values.push(*i as f64);
                     }
                     Value::Float(f) => {
                         entry.numeric_count += 1;
                         entry.sum += f;
                         entry.sum_sq += f.powi(2);
+                        entry.numeric_values.push(*f);
                     }
                     _ => {}
                 }
@@ -789,7 +817,7 @@ impl Stage for StatsStage {
         }
 
         let mut output = Vec::new();
-        for (field, s) in stats {
+        for (field, mut s) in stats {
             let mut rec = indexmap::IndexMap::new();
             rec.insert("field".to_string(), Value::String(field));
             rec.insert("count".to_string(), Value::Integer(s.count));
@@ -805,9 +833,26 @@ impl Stage for StatsStage {
                 let variance = (s.sum_sq / s.numeric_count as f64 - mean * mean).max(0.0);
                 rec.insert("mean".to_string(), Value::Float(mean));
                 rec.insert("stddev".to_string(), Value::Float(variance.sqrt()));
+
+                s.numeric_values.sort_by(|a, b| a.total_cmp(b));
+                rec.insert(
+                    "median".to_string(),
+                    Value::Float(percentile(&s.numeric_values, 50.0)),
+                );
+                rec.insert(
+                    "p90".to_string(),
+                    Value::Float(percentile(&s.numeric_values, 90.0)),
+                );
+                rec.insert(
+                    "p99".to_string(),
+                    Value::Float(percentile(&s.numeric_values, 99.0)),
+                );
             } else {
                 rec.insert("mean".to_string(), Value::Null);
                 rec.insert("stddev".to_string(), Value::Null);
+                rec.insert("median".to_string(), Value::Null);
+                rec.insert("p90".to_string(), Value::Null);
+                rec.insert("p99".to_string(), Value::Null);
             }
             output.push(Ok(rec));
         }
@@ -2156,6 +2201,72 @@ mod tests {
         let out = collect_ok(StatsStage.process(input));
         let row = stats_field_row(&out, "x");
         assert_eq!(row.get("stddev"), Some(&Value::Float(0.0)));
+    }
+
+    #[test]
+    fn stats_computes_percentiles_1_to_100() {
+        // Matches numpy/pandas' default linear-interpolation percentile
+        // for 1..=100: median 50.5, p90 90.1, p99 99.01 (approximately -
+        // the interpolation arithmetic isn't exact in f64).
+        let input = stream(
+            (1..=100)
+                .map(|n| rec(&[("n", Value::Integer(n))]))
+                .collect(),
+        );
+        let out = collect_ok(StatsStage.process(input));
+        let row = stats_field_row(&out, "n");
+        let as_f64 = |v: &Value| match v {
+            Value::Float(f) => *f,
+            other => panic!("expected Float, got {other:?}"),
+        };
+        assert!((as_f64(row.get("median").unwrap()) - 50.5).abs() < 1e-9);
+        assert!((as_f64(row.get("p90").unwrap()) - 90.1).abs() < 1e-9);
+        assert!((as_f64(row.get("p99").unwrap()) - 99.01).abs() < 1e-9);
+    }
+
+    #[test]
+    fn stats_percentiles_null_for_non_numeric_field() {
+        let input = stream(vec![
+            rec(&[("name", Value::String("Alice".to_string()))]),
+            rec(&[("name", Value::String("Bob".to_string()))]),
+        ]);
+        let out = collect_ok(StatsStage.process(input));
+        let row = stats_field_row(&out, "name");
+        assert_eq!(row.get("median"), Some(&Value::Null));
+        assert_eq!(row.get("p90"), Some(&Value::Null));
+        assert_eq!(row.get("p99"), Some(&Value::Null));
+    }
+
+    #[test]
+    fn stats_percentiles_single_value_equal_the_value() {
+        let input = stream(vec![rec(&[("x", Value::Integer(42))])]);
+        let out = collect_ok(StatsStage.process(input));
+        let row = stats_field_row(&out, "x");
+        assert_eq!(row.get("median"), Some(&Value::Float(42.0)));
+        assert_eq!(row.get("p90"), Some(&Value::Float(42.0)));
+        assert_eq!(row.get("p99"), Some(&Value::Float(42.0)));
+    }
+
+    #[test]
+    fn stats_median_unaffected_by_input_order() {
+        let input = stream(vec![
+            rec(&[("x", Value::Integer(5))]),
+            rec(&[("x", Value::Integer(1))]),
+            rec(&[("x", Value::Integer(3))]),
+            rec(&[("x", Value::Integer(2))]),
+            rec(&[("x", Value::Integer(4))]),
+        ]);
+        let out = collect_ok(StatsStage.process(input));
+        let row = stats_field_row(&out, "x");
+        assert_eq!(row.get("median"), Some(&Value::Float(3.0)));
+    }
+
+    #[test]
+    fn percentile_helper_matches_numpy_linear_interpolation() {
+        let sorted = [1.0, 2.0, 3.0, 4.0];
+        assert_eq!(percentile(&sorted, 0.0), 1.0);
+        assert_eq!(percentile(&sorted, 100.0), 4.0);
+        assert_eq!(percentile(&sorted, 50.0), 2.5);
     }
 
     #[test]

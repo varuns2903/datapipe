@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `stats`: adds `median`/`p90`/`p99` (linear-interpolation percentiles,
+  the numpy/pandas default convention) alongside the existing
+  `count`/`nulls`/`distinct`/`min`/`max`/`mean`/`stddev`, `null` for
+  non-numeric fields same as `mean`/`stddev`. Unlike the rest of `stats`,
+  computing an exact percentile has no incremental/O(1)-memory
+  algorithm - it requires the full sorted set of values - so `stats` now
+  keeps every *numeric* value seen for a field (not just a count of
+  distinct ones) to sort at the end. This is a real, larger memory
+  commitment than `stats` previously made, and is documented as such in
+  README/mdBook rather than left implicit. Implemented as a `percentile()`
+  helper using linear interpolation between the two nearest ranks.
+  Verified: unit tests (percentiles for 1..=100 checked against the known
+  numpy result, null for non-numeric fields, single-value field,
+  input-order independence, and the `percentile()` helper directly) and
+  CLI integration tests (percentiles via `stats`, null for non-numeric).
 - `--raw`/`-r`: a global flag that prints a single-field record's value
   as a raw scalar instead of a JSON object, matching `jq -r` - a string
   prints unquoted, everything else (number, bool, null, array, object)
