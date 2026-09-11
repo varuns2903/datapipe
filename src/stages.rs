@@ -466,18 +466,22 @@ impl Stage for ExplodeStage {
 }
 
 pub struct MapStage {
-    pub field: String,
-    pub ast: crate::expr::Expr,
+    /// One or more `(field, expression)` assignments, applied in order.
+    /// Later assignments can reference fields set by earlier ones in the
+    /// same `map` invocation, since each is evaluated against the record
+    /// as it stands after the previous assignment was applied.
+    pub assignments: Vec<(String, crate::expr::Expr)>,
 }
 
 impl Stage for MapStage {
     fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
-        let field = self.field.clone();
-        let ast = self.ast.clone();
+        let assignments = self.assignments.clone();
         let iter = input.map(move |res| match res {
             Ok(mut record) => {
-                let new_val = ast.evaluate(&record);
-                record.insert(field.clone(), new_val);
+                for (field, ast) in &assignments {
+                    let new_val = ast.evaluate(&record);
+                    record.insert(field.clone(), new_val);
+                }
                 Ok(record)
             }
             Err(e) => Err(e),
@@ -1686,11 +1690,29 @@ mod tests {
     fn map_stage_sets_computed_field() {
         let input = stream(vec![rec(&[("n", Value::Integer(5))])]);
         let stage = MapStage {
-            field: "double".to_string(),
-            ast: crate::expr::parse(".n * 2").unwrap(),
+            assignments: vec![("double".to_string(), crate::expr::parse(".n * 2").unwrap())],
         };
         let out = collect_ok(stage.process(input));
         assert_eq!(out[0].get("double"), Some(&Value::Integer(10)));
+    }
+
+    #[test]
+    fn map_stage_applies_multiple_assignments_in_order() {
+        let input = stream(vec![rec(&[("n", Value::Integer(5))])]);
+        let stage = MapStage {
+            assignments: vec![
+                ("double".to_string(), crate::expr::parse(".n * 2").unwrap()),
+                // References `double`, set by the previous assignment in
+                // the same map call - confirms sequential evaluation.
+                (
+                    "quadruple".to_string(),
+                    crate::expr::parse(".double * 2").unwrap(),
+                ),
+            ],
+        };
+        let out = collect_ok(stage.process(input));
+        assert_eq!(out[0].get("double"), Some(&Value::Integer(10)));
+        assert_eq!(out[0].get("quadruple"), Some(&Value::Integer(20)));
     }
 
     #[test]

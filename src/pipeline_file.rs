@@ -107,6 +107,8 @@ pub enum StageSpec {
     Map {
         field: String,
         expression: String,
+        #[serde(default)]
+        set: Vec<String>,
     },
     Join {
         file: String,
@@ -155,7 +157,15 @@ pub fn into_command(spec: StageSpec) -> Command {
         StageSpec::Rename { renames } => Command::Rename { renames },
         StageSpec::Flatten { sep } => Command::Flatten { sep },
         StageSpec::Sample { n } => Command::Sample { n },
-        StageSpec::Map { field, expression } => Command::Map { field, expression },
+        StageSpec::Map {
+            field,
+            expression,
+            set,
+        } => Command::Map {
+            field,
+            expression,
+            set,
+        },
         StageSpec::Join {
             file,
             on,

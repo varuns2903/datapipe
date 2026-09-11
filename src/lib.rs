@@ -20,16 +20,24 @@ use std::io::{stdin, stdout, BufReader, BufWriter, Write};
 /// Shared by both direct CLI dispatch and `run`'s multi-stage pipeline
 /// files, so there is exactly one place that knows how to turn a `Command`
 /// into a `Stage`.
+/// Parses a `filter`/`map` expression, converting the parser's error into
+/// a `miette`-rendered diagnostic. Shared by every place an expression
+/// string needs to become an `Expr` AST, so there's exactly one spot that
+/// knows how to translate a parse failure into user-facing output.
+fn parse_expr(expression: &str) -> miette::Result<crate::expr::Expr> {
+    crate::expr::parse(expression).map_err(|e| {
+        if let Ok(diag) = e.downcast::<crate::error::DataPipeError>() {
+            diag.into()
+        } else {
+            miette::miette!("Failed to parse expression")
+        }
+    })
+}
+
 fn command_into_stage(command: Command, strict: bool) -> miette::Result<Option<Box<dyn Stage>>> {
     let stage: Box<dyn Stage> = match command {
         Command::Filter { expression } => {
-            let ast = crate::expr::parse(&expression).map_err(|e| {
-                if let Ok(diag) = e.downcast::<crate::error::DataPipeError>() {
-                    diag.into()
-                } else {
-                    miette::miette!("Failed to parse expression")
-                }
-            })?;
+            let ast = parse_expr(&expression)?;
             Box::new(FilterStage { ast })
         }
         Command::Search { text, regex } => {
@@ -86,15 +94,20 @@ fn command_into_stage(command: Command, strict: bool) -> miette::Result<Option<B
         }
         Command::Flatten { sep } => Box::new(FlattenStage { separator: sep }),
         Command::Sample { n } => Box::new(SampleStage { n }),
-        Command::Map { field, expression } => {
-            let ast = crate::expr::parse(&expression).map_err(|e| {
-                if let Ok(diag) = e.downcast::<crate::error::DataPipeError>() {
-                    diag.into()
-                } else {
-                    miette::miette!("Failed to parse expression")
-                }
-            })?;
-            Box::new(MapStage { field, ast })
+        Command::Map {
+            field,
+            expression,
+            set,
+        } => {
+            let mut assignments = Vec::with_capacity(1 + set.len());
+            assignments.push((field, parse_expr(&expression)?));
+            for entry in set {
+                let (f, e) = entry.split_once('=').ok_or_else(|| {
+                    miette::miette!("Invalid --set '{}': expected FIELD=EXPRESSION", entry)
+                })?;
+                assignments.push((f.to_string(), parse_expr(e)?));
+            }
+            Box::new(MapStage { assignments })
         }
         Command::Join {
             file,

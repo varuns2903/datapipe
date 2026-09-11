@@ -132,7 +132,16 @@ pub enum Command {
     /// Take a uniform random sample of N records (buffers up to N records)
     Sample { n: usize },
     /// Compute a new field or overwrite an existing one using an expression
-    Map { field: String, expression: String },
+    Map {
+        field: String,
+        expression: String,
+        /// Additional field=expression assignments computed in the same
+        /// pass, applied in order after the primary one; repeatable, e.g.
+        /// `--set tax=".total * 0.1" --set grand_total=".total + .tax"`.
+        /// Later assignments can reference fields set by earlier ones.
+        #[arg(long = "set", value_name = "FIELD=EXPRESSION")]
+        set: Vec<String>,
+    },
     /// Generate a shell completion script and print it to stdout
     Completions {
         /// The shell to generate completions for

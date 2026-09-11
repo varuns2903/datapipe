@@ -7,7 +7,7 @@ These stages process the stream lazily, one record at a time, with O(1) memory.
 - `select <fields> [--exclude]`: Keeps only the specified comma-separated fields. Missing fields are filled with `null`. With `--exclude`, `<fields>` is instead an exclusion list — keeps everything except the named fields (field order preserved), e.g. `dp select password,secret --exclude`.
 - `limit <max>`: Halts the stream after yielding `N` records.
 - `explode <field>`: Expands an array-valued field into one record per element. Records where the field isn't an array pass through unchanged.
-- `map <field> <expression>`: Computes a new field (or overwrites an existing one) using an expression.
+- `map <field> <expression> [--set FIELD=EXPRESSION ...]`: Computes a new field (or overwrites an existing one) using an expression. Repeat `--set` to compute multiple fields in one pass, e.g. `dp map total '.price * .qty' --set tax='.total * 0.1'` — assignments are applied in order, so a later one (like `tax` here) can reference a field set by an earlier one (`total`).
 - `inspect`: Passes the stream through unchanged — useful for debugging where in a pipeline something goes wrong.
 - `rename <old:new,...>`: Renames one or more fields, e.g. `dp rename user_name:name,ts:timestamp`. Fields not mentioned are left untouched; field order is preserved.
 - `flatten [--sep <sep>]`: Flattens nested objects into dot-path keys, e.g. `{"user":{"name":"Alice"}}` becomes `{"user.name":"Alice"}`. The separator defaults to `.`. Array-valued fields are left as-is — use `explode` for those. Useful before `csv` output, since nested objects otherwise render as `[complex]`.

@@ -197,6 +197,37 @@ fn test_join_merge_multi_field_on() {
 }
 
 #[test]
+fn test_map_multiple_set_assignments_evaluated_in_order() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("map")
+        .arg("total")
+        .arg(".price * .qty")
+        .arg("--set")
+        .arg("tax=.total * 0.1")
+        .arg("--set")
+        .arg("grand_total=.total + .tax")
+        .write_stdin("{\"price\":10,\"qty\":2}\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"total\":20"))
+        .stdout(predicate::str::contains("\"tax\":2.0"))
+        .stdout(predicate::str::contains("\"grand_total\":22.0"));
+}
+
+#[test]
+fn test_map_set_rejects_missing_equals() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("map")
+        .arg("total")
+        .arg(".price")
+        .arg("--set")
+        .arg("no_equals_sign_here")
+        .write_stdin("{\"price\":10}\n")
+        .assert()
+        .failure();
+}
+
+#[test]
 fn test_completions_registers_actual_binary_name() {
     for shell in ["bash", "zsh", "fish", "powershell", "elvish"] {
         let mut cmd = Command::cargo_bin("dp").unwrap();

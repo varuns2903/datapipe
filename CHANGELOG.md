@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `map`: repeatable `--set FIELD=EXPRESSION` for computing multiple fields
+  in one pass, in addition to the existing primary `<field> <expression>`
+  positional pair (fully backward compatible - the primary assignment
+  behaves exactly as before when `--set` isn't used). Assignments are
+  applied in order, so a later `--set` can reference a field computed by
+  an earlier one in the same `map` call, e.g. `dp map total '.price *
+  .qty' --set tax='.total * 0.1' --set grand_total='.total + .tax'`.
+  Previously this required three separate `map` stages piped together.
+  `MapStage` now holds `Vec<(String, Expr)>` instead of a single
+  `(field, ast)` pair; expression-parsing error handling was factored out
+  into a shared `parse_expr()` helper (previously duplicated between
+  `filter` and `map`) so both the primary assignment and every `--set`
+  entry get the same miette-rendered diagnostics on a syntax error.
 - Multi-field support for `sort`, `unique`, `group`, and `join --on`. Real
   tabular data routinely needs a composite key (e.g. sort by country then
   age, join on region+id), and previously every one of these stages was
