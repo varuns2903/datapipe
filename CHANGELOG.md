@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Unary minus in `filter`/`map` expressions: `-5`, `-.field`, and nested
+  forms like `--5` or `3 - -5` now parse and evaluate correctly. Previously
+  only binary subtraction was supported, so producing a negative value
+  required a workaround like `0 - 5`. Implemented by desugaring `-<expr>`
+  to `0 - <expr>` at parse time in `parse_unary`, reusing the existing
+  `Operator::Sub` evaluation (which already handles Integer/Float
+  promotion correctly) instead of adding a dedicated AST variant. Note: if
+  the expression itself starts with `-` (e.g. `-.age`), it needs `--`
+  before it on the command line so the CLI parser doesn't mistake it for a
+  flag, e.g. `dp map delta -- '-.age'` — documented in README and mdBook.
 - `join --merge`: a memory-bounded sort-merge join alternative to the
   default hash join. `join <file>` normally loads `<file>` entirely into
   memory as a hash table before the main stream starts, which is fine for

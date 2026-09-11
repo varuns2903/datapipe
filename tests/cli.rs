@@ -23,6 +23,31 @@ fn test_filter_command() {
 }
 
 #[test]
+fn test_map_unary_minus_on_field() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("map")
+        .arg("delta")
+        .arg("--")
+        .arg("-.age")
+        .write_stdin("{\"age\":30}\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"delta\":-30"));
+}
+
+#[test]
+fn test_filter_unary_minus_literal() {
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("filter")
+        .arg(".balance < -5")
+        .write_stdin("{\"balance\":-10}\n{\"balance\":10}\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("-10"))
+        .stdout(predicate::str::contains("\"balance\":10").not());
+}
+
+#[test]
 fn test_missing_command() {
     let mut cmd = Command::cargo_bin("dp").unwrap();
     cmd.assert()

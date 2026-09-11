@@ -622,6 +622,19 @@ impl Parser {
             self.consume();
             return Ok(Expr::Not(Box::new(self.parse_unary()?)));
         }
+        // Desugars to `0 - operand` rather than adding a dedicated Expr
+        // variant: Operator::Sub already handles Integer/Float combinations
+        // correctly (including promoting to Float when the operand is
+        // one), so this reuses that logic instead of duplicating it in
+        // evaluate().
+        if let Some(Token::Minus) = self.peek() {
+            self.consume();
+            return Ok(Expr::BinaryOp {
+                op: Operator::Sub,
+                left: Box::new(Expr::Literal(Value::Integer(0))),
+                right: Box::new(self.parse_unary()?),
+            });
+        }
         self.parse_primary()
     }
     /// Parses a `(expr, expr, ...)` list, consuming the leading `(` and
@@ -1499,17 +1512,56 @@ mod tests {
 
     #[test]
     fn eval_abs_preserves_numeric_type() {
-        // No unary minus support (a pre-existing, documented limitation -
-        // only subtraction between two operands), so produce a negative
-        // value via subtraction rather than a `-5` literal.
         let rec = record_with(&[]);
+        assert_eq!(parse("abs(-5)").unwrap().evaluate(&rec), Value::Integer(5));
         assert_eq!(
-            parse("abs(0 - 5)").unwrap().evaluate(&rec),
-            Value::Integer(5)
+            parse("abs(-5.5)").unwrap().evaluate(&rec),
+            Value::Float(5.5)
+        );
+    }
+
+    #[test]
+    fn eval_unary_minus_on_integer_literal() {
+        let rec = record_with(&[]);
+        assert_eq!(parse("-5").unwrap().evaluate(&rec), Value::Integer(-5));
+    }
+
+    #[test]
+    fn eval_unary_minus_on_float_literal() {
+        let rec = record_with(&[]);
+        assert_eq!(parse("-5.5").unwrap().evaluate(&rec), Value::Float(-5.5));
+    }
+
+    #[test]
+    fn eval_unary_minus_on_field() {
+        let rec = record_with(&[("age", Value::Integer(30))]);
+        assert_eq!(parse("-.age").unwrap().evaluate(&rec), Value::Integer(-30));
+    }
+
+    #[test]
+    fn eval_double_unary_minus_cancels_out() {
+        let rec = record_with(&[]);
+        assert_eq!(parse("--5").unwrap().evaluate(&rec), Value::Integer(5));
+    }
+
+    #[test]
+    fn eval_unary_minus_binds_tighter_than_binary_minus() {
+        // 3 - -5 == 8, not a parse error and not (3 - (-5)) misparsed as
+        // (3 - -) 5 or similar.
+        let rec = record_with(&[]);
+        assert_eq!(parse("3 - -5").unwrap().evaluate(&rec), Value::Integer(8));
+    }
+
+    #[test]
+    fn eval_unary_minus_in_comparison() {
+        let rec = record_with(&[("balance", Value::Integer(-10))]);
+        assert_eq!(
+            parse(".balance < 0").unwrap().evaluate(&rec),
+            Value::Boolean(true)
         );
         assert_eq!(
-            parse("abs(0.0 - 5.5)").unwrap().evaluate(&rec),
-            Value::Float(5.5)
+            parse(".balance == -10").unwrap().evaluate(&rec),
+            Value::Boolean(true)
         );
     }
 

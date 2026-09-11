@@ -3,7 +3,7 @@
 `filter` and `map` share the same expression language.
 
 **Precedence** (lowest to highest binding): `||` → `&&` → comparison (`== != > < >= <=`) → `+ -` → `* /` → unary `!`.
-All binary operators are left-associative. Parentheses `( )` can be used to override precedence. There is currently no support for unary minus (`-5`) — only subtraction between two operands.
+All binary operators are left-associative. Parentheses `( )` can be used to override precedence. Unary minus (`-5`, `-.field`) is supported and binds tighter than binary `+`/`-`/`*`/`/`. If the expression *itself* starts with `-` (e.g. `-.age`), put `--` before it so the shell/CLI parser doesn't mistake it for a flag: `dp map delta -- '-.age'`. A `-` that isn't the first character (e.g. `.a > -5`) needs no such workaround.
 
 - **Field access:** `.fieldname` — evaluates to `null` if the field is missing. Nested fields are supported via dotted paths, e.g. `.user.age`, which evaluates to `null` if any segment is missing or isn't an object.
 - **Literals:** strings (`"value"`), integers (`42`), floats (`3.5`), booleans (`true`/`false`).
