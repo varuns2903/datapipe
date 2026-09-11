@@ -8,6 +8,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `join --merge`: a memory-bounded sort-merge join alternative to the
+  default hash join. `join <file>` normally loads `<file>` entirely into
+  memory as a hash table before the main stream starts, which is fine for
+  lookup-table-sized files but unbounded for huge ones. `--merge` instead
+  sorts both the main stream and `<file>` by the join key (reusing the same
+  external merge sort `sort` already uses, spilling 50k-record chunks to
+  temp files rather than buffering fully) and merges them with a two-pointer
+  scan, so memory stays bounded regardless of `<file>`'s size. Implemented
+  as `MergeJoinStage`/`MergeJoinIter` using a "step + queue" iterator
+  pattern (`step()` performs one atomic unit of work — advancing a pointer
+  or emitting a matched group — pushing zero or more results into a
+  `VecDeque` that `next()` drains), which avoids the correctness pitfalls of
+  a hand-rolled resumable state machine spanning multiple `next()` calls.
+  `--merge` has two deliberate behavioral differences from the default hash
+  join, both documented in the README and mdBook: for a duplicate join key,
+  the hash join keeps only the *last* matching record from `<file>`
+  (a hash-table insert overwrites earlier ones), while `--merge` produces
+  the full cross product of every matching left/right pair, which is the
+  textbook-correct sort-merge join behavior; and `--merge`'s output comes
+  out in join-key-sorted order rather than the main stream's original
+  order, since sorting is inherent to the algorithm. Supports all four join
+  types (`left`/`inner`/`right`/`full`). Verified against the hash join for
+  unique keys, all four join types, duplicate-key cross-products on both
+  sides, empty-stream edges on both sides, and at a 60,000-record scale
+  that exercises the external sort's 50k-record chunk boundary.
+
+### Known limitation
+- `external_sort` (used by `sort` and `join --merge`) currently drops
+  malformed records silently instead of honoring `--strict`, unlike every
+  other stage in the pipeline. This was discovered while building
+  `join --merge` (both share the same external-sort code path) and is
+  being tracked as a follow-up fix rather than folded into this change.
+
+### Added
 - Date/time functions in `filter`/`map` expressions: `to_unix(a)` parses an
   RFC3339 datetime or bare `"YYYY-MM-DD"` date into a Unix timestamp,
   enabling date-range filtering via ordinary integer comparison; `year(a)`,

@@ -397,3 +397,57 @@ fn test_search_invalid_regex_fails() {
         .assert()
         .failure();
 }
+
+#[test]
+fn test_join_merge_matches_hash_join_for_unique_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let right_path = dir.path().join("right.jsonl");
+    std::fs::write(
+        &right_path,
+        "{\"id\":\"1\",\"name\":\"Alice\"}\n{\"id\":\"2\",\"name\":\"Bob\"}\n",
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    cmd.arg("join")
+        .arg(right_path.to_str().unwrap())
+        .arg("--on")
+        .arg("id")
+        .arg("--merge")
+        .write_stdin("{\"id\":\"1\",\"order\":100}\n{\"id\":\"2\",\"order\":200}\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Alice"))
+        .stdout(predicate::str::contains("Bob"));
+}
+
+#[test]
+fn test_join_merge_produces_cross_product_for_duplicate_keys() {
+    // The documented behavioral difference from the default hash join,
+    // which keeps only the last duplicate-key record.
+    let dir = tempfile::tempdir().unwrap();
+    let right_path = dir.path().join("right.jsonl");
+    std::fs::write(
+        &right_path,
+        "{\"id\":\"1\",\"tag\":\"a\"}\n{\"id\":\"1\",\"tag\":\"b\"}\n",
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("dp").unwrap();
+    let output = cmd
+        .arg("join")
+        .arg(right_path.to_str().unwrap())
+        .arg("--on")
+        .arg("id")
+        .arg("--merge")
+        .arg("--type")
+        .arg("inner")
+        .write_stdin("{\"id\":\"1\"}\n")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let line_count = String::from_utf8(output).unwrap().lines().count();
+    assert_eq!(line_count, 2);
+}

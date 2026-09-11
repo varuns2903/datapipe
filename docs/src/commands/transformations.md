@@ -15,10 +15,10 @@ These stages process the stream lazily, one record at a time, with O(1) memory.
 ## join
 
 ```
-join <file> --on <field> [--type <left|inner|right|full>]
+join <file> --on <field> [--type <left|inner|right|full>] [--merge]
 ```
 
-Joins each record with a matching record from `<file>` (JSONL or CSV) on the given field. Defaults to `left`. `<file>` is loaded entirely into memory as a hash table before the main stream starts, so memory usage is proportional to its size — fine for typical lookup-table-sized files, not bounded for huge ones.
+Joins each record with a matching record from `<file>` (JSONL or CSV) on the given field. Defaults to `left`.
 
 - **`left`** (default): keeps every record from the main stream; merges in matching fields from `<file>` when found, otherwise passes the record through unchanged.
 - **`inner`**: keeps only records that have a match in `<file>`.
@@ -27,4 +27,14 @@ Joins each record with a matching record from `<file>` (JSONL or CSV) on the giv
 
 ```bash
 dp join customers.jsonl --on customer_id --type inner
+```
+
+### Memory: hash join (default) vs `--merge`
+
+By default, `join` loads `<file>` entirely into memory as a hash table before the main stream starts — fine for typical lookup-table-sized files, not bounded for huge ones. Pass **`--merge`** to use a memory-bounded sort-merge join instead: both sides are sorted by the join key first (the same external merge sort `sort` uses, spilling to temp files rather than buffering fully), so memory is bounded regardless of how large `<file>` is.
+
+`--merge` has one deliberate behavioral difference worth knowing: for a **duplicate join key**, the default hash join keeps only the *last* matching record from `<file>` (a hash-table insert overwrites earlier ones), while `--merge` produces the full cross product — every combination of matching left/right records, which is the textbook-correct sort-merge join behavior. Also, `--merge`'s output comes out in join-key-sorted order rather than the main stream's original order, since sorting is inherent to the algorithm.
+
+```bash
+dp join huge_lookup.jsonl --on id --merge
 ```

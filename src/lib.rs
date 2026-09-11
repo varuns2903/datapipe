@@ -88,11 +88,17 @@ fn command_into_stage(command: Command, strict: bool) -> miette::Result<Option<B
             file,
             on,
             join_type,
+            merge,
         } => {
             let f = std::fs::File::open(&file)
                 .map_err(|e| miette::miette!("Failed to open join file: {}", e))?;
             let reader = BufReader::new(f);
-            let join_records: crate::pipeline::RecordStream = if file.ends_with(".csv") {
+            // 'static: File/BufReader<File> are fully owned (no borrows), so
+            // this stream doesn't need to be tied to this function's
+            // lifetime - needed for the --merge path below, which stores
+            // the pre-sorted right-hand stream inside MergeJoinStage across
+            // the whole pipeline's execution, not just this construction step.
+            let join_records: crate::pipeline::RecordStream<'static> = if file.ends_with(".csv") {
                 Box::new(
                     crate::io::read_csv_stream(reader)
                         .map_err(|e| miette::miette!(e.to_string()))?,
@@ -101,30 +107,36 @@ fn command_into_stage(command: Command, strict: bool) -> miette::Result<Option<B
                 Box::new(crate::io::read_json_stream(reader))
             };
 
-            let mut hash_map = std::collections::HashMap::new();
-            for res in join_records {
-                let rec = match res {
-                    Ok(rec) => rec,
-                    Err(e) if strict => {
-                        return Err(miette::miette!("Malformed record in join file: {e}"));
-                    }
-                    Err(e) => {
-                        eprintln!("Warning: skipping malformed record in join file: {e}");
-                        continue;
-                    }
-                };
-                let key = match rec.get(&on) {
-                    Some(crate::model::Value::String(s)) => s.clone(),
-                    Some(val) => serde_json::to_string(val).unwrap_or_default(),
-                    None => continue,
-                };
-                hash_map.insert(key, rec);
+            if merge {
+                let join_records = apply_strict_policy(join_records, strict);
+                let right_sorted = stages::external_sort(join_records, on.clone(), false);
+                Box::new(MergeJoinStage::new(on, join_type, right_sorted))
+            } else {
+                let mut hash_map = std::collections::HashMap::new();
+                for res in join_records {
+                    let rec = match res {
+                        Ok(rec) => rec,
+                        Err(e) if strict => {
+                            return Err(miette::miette!("Malformed record in join file: {e}"));
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: skipping malformed record in join file: {e}");
+                            continue;
+                        }
+                    };
+                    let key = match rec.get(&on) {
+                        Some(crate::model::Value::String(s)) => s.clone(),
+                        Some(val) => serde_json::to_string(val).unwrap_or_default(),
+                        None => continue,
+                    };
+                    hash_map.insert(key, rec);
+                }
+                Box::new(JoinStage {
+                    hash_map: std::sync::Arc::new(hash_map),
+                    on,
+                    join_type,
+                })
             }
-            Box::new(JoinStage {
-                hash_map: std::sync::Arc::new(hash_map),
-                on,
-                join_type,
-            })
         }
         Command::Inspect | Command::Csv | Command::Table => return Ok(None),
         Command::Completions { .. } | Command::Man | Command::Run { .. } => {

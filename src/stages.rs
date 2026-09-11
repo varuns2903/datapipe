@@ -313,64 +313,76 @@ impl<'a> Iterator for ExternalSortIter<'a> {
 }
 
 impl Stage for SortStage {
-    fn process<'a>(&'a self, mut input: RecordStream<'a>) -> RecordStream<'a> {
-        let field = self.field.clone();
-        let desc = self.desc;
-        let mut temp_files = Vec::new();
+    fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
+        external_sort(input, self.field.clone(), self.desc)
+    }
+}
 
-        loop {
-            let mut chunk = Vec::with_capacity(50_000);
-            for _ in 0..50_000 {
-                if let Some(Ok(rec)) = input.next() {
-                    chunk.push(rec);
-                } else {
-                    break;
-                }
-            }
-            if chunk.is_empty() {
+/// The actual external-merge-sort logic, factored out of `SortStage::process`
+/// as a free function so it can also be used to pre-sort a `'static` stream
+/// (e.g. `join --merge`'s right-hand file) without being saddled with
+/// `Stage::process`'s `&'a self` signature, which would otherwise force the
+/// returned stream's lifetime to match a local `SortStage` value's lifetime
+/// even though the implementation never actually borrows from `self`.
+pub(crate) fn external_sort<'a>(
+    mut input: RecordStream<'a>,
+    field: String,
+    desc: bool,
+) -> RecordStream<'a> {
+    let mut temp_files = Vec::new();
+
+    loop {
+        let mut chunk = Vec::with_capacity(50_000);
+        for _ in 0..50_000 {
+            if let Some(Ok(rec)) = input.next() {
+                chunk.push(rec);
+            } else {
                 break;
             }
+        }
+        if chunk.is_empty() {
+            break;
+        }
 
-            chunk.sort_by(|a, b| {
-                let val_a = a.get(&field).unwrap_or(&Value::Null);
-                let val_b = b.get(&field).unwrap_or(&Value::Null);
-                let mut ord = crate::model::cmp_values(val_a, val_b);
-                if desc {
-                    ord = ord.reverse();
-                }
-                ord
-            });
-
-            let mut tmp = tempfile::NamedTempFile::new().unwrap();
-            for rec in chunk {
-                let json = serde_json::to_string(&rec).unwrap();
-                use std::io::Write;
-                writeln!(tmp, "{}", json).unwrap();
+        chunk.sort_by(|a, b| {
+            let val_a = a.get(&field).unwrap_or(&Value::Null);
+            let val_b = b.get(&field).unwrap_or(&Value::Null);
+            let mut ord = crate::model::cmp_values(val_a, val_b);
+            if desc {
+                ord = ord.reverse();
             }
-            temp_files.push(tmp.into_temp_path());
-        }
+            ord
+        });
 
-        if temp_files.is_empty() {
-            return Box::new(std::iter::empty());
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        for rec in chunk {
+            let json = serde_json::to_string(&rec).unwrap();
+            use std::io::Write;
+            writeln!(tmp, "{}", json).unwrap();
         }
-
-        let mut readers: Vec<RecordStream<'a>> = Vec::new();
-        for path in &temp_files {
-            let file = std::fs::File::open(path).unwrap();
-            let reader = std::io::BufReader::new(file);
-            let stream = crate::io::read_json_stream(reader);
-            readers.push(Box::new(stream));
-        }
-
-        Box::new(ExternalSortIter {
-            readers,
-            heap: std::collections::BinaryHeap::new(),
-            field,
-            desc,
-            initialized: false,
-            _temp_files: temp_files,
-        })
+        temp_files.push(tmp.into_temp_path());
     }
+
+    if temp_files.is_empty() {
+        return Box::new(std::iter::empty());
+    }
+
+    let mut readers: Vec<RecordStream<'a>> = Vec::new();
+    for path in &temp_files {
+        let file = std::fs::File::open(path).unwrap();
+        let reader = std::io::BufReader::new(file);
+        let stream = crate::io::read_json_stream(reader);
+        readers.push(Box::new(stream));
+    }
+
+    Box::new(ExternalSortIter {
+        readers,
+        heap: std::collections::BinaryHeap::new(),
+        field,
+        desc,
+        initialized: false,
+        _temp_files: temp_files,
+    })
 }
 
 pub struct ExplodeStage {
@@ -893,6 +905,184 @@ impl Stage for JoinStage {
             matched_keys: std::collections::HashSet::new(),
             right_tail: None,
         })
+    }
+}
+
+fn join_key_value(record: &Record, on: &str) -> Value {
+    record.get(on).cloned().unwrap_or(Value::Null)
+}
+
+/// `join --merge`: a streaming sort-merge join, used instead of `JoinStage`'s
+/// hash join when the right-hand file might be too large to hold entirely in
+/// memory. Both sides are sorted by the join key first (`external_sort`,
+/// bounded memory via temp-file spilling - the main stream is sorted lazily
+/// inside `process`, the right-hand file is pre-sorted once at construction
+/// time since it doesn't depend on the main stream). The merge itself then
+/// only needs to buffer one key's worth of duplicates at a time on each
+/// side, not the whole file.
+///
+/// Note a deliberate behavioral difference from the hash join: `JoinStage`
+/// keeps only the *last* right-hand record for a duplicate key (a HashMap
+/// insert overwrites earlier ones); `MergeJoinStage` instead produces the
+/// full cross product for duplicate keys on either side, which is the
+/// textbook-correct sort-merge join behavior. Documented in the README
+/// rather than papered over, since it's a real difference a user might rely
+/// on one way or the other.
+pub struct MergeJoinStage {
+    pub on: String,
+    pub join_type: JoinType,
+    right_sorted: std::cell::RefCell<Option<RecordStream<'static>>>,
+}
+
+impl MergeJoinStage {
+    pub fn new(on: String, join_type: JoinType, right_sorted: RecordStream<'static>) -> Self {
+        Self {
+            on,
+            join_type,
+            right_sorted: std::cell::RefCell::new(Some(right_sorted)),
+        }
+    }
+}
+
+impl Stage for MergeJoinStage {
+    fn process<'a>(&'a self, input: RecordStream<'a>) -> RecordStream<'a> {
+        let left_sorted = external_sort(input, self.on.clone(), false);
+        let right_sorted = self
+            .right_sorted
+            .borrow_mut()
+            .take()
+            .expect("MergeJoinStage::process called more than once");
+        Box::new(MergeJoinIter {
+            left: left_sorted.peekable(),
+            right: right_sorted.peekable(),
+            on: self.on.clone(),
+            join_type: self.join_type,
+            queue: std::collections::VecDeque::new(),
+        })
+    }
+}
+
+/// Drives the merge step by step: each call to `step()` is a complete,
+/// self-contained unit of work (advance past one key, or one whole matching
+/// key-group) that pushes zero or more ready records into `queue`, which
+/// `next()` then drains before running another step. This avoids having to
+/// hand-roll a resumable state machine across `next()` calls - each step
+/// either fully finishes its unit of work or doesn't start one, so there's
+/// no partial-progress state to track between calls.
+struct MergeJoinIter<'a> {
+    left: std::iter::Peekable<RecordStream<'a>>,
+    right: std::iter::Peekable<RecordStream<'a>>,
+    on: String,
+    join_type: JoinType,
+    queue: std::collections::VecDeque<anyhow::Result<Record>>,
+}
+
+impl<'a> MergeJoinIter<'a> {
+    /// Returns `false` only when both sides are exhausted and there is
+    /// truly nothing left to do.
+    fn step(&mut self) -> bool {
+        match (self.left.peek(), self.right.peek()) {
+            (None, None) => false,
+            (Some(_), None) => {
+                match self.left.next().unwrap() {
+                    Err(e) => self.queue.push_back(Err(e)),
+                    Ok(rec) => {
+                        if matches!(self.join_type, JoinType::Left | JoinType::Full) {
+                            self.queue.push_back(Ok(rec));
+                        }
+                    }
+                }
+                true
+            }
+            (None, Some(_)) => {
+                match self.right.next().unwrap() {
+                    Err(e) => self.queue.push_back(Err(e)),
+                    Ok(rec) => {
+                        if matches!(self.join_type, JoinType::Right | JoinType::Full) {
+                            self.queue.push_back(Ok(rec));
+                        }
+                    }
+                }
+                true
+            }
+            (Some(Err(_)), _) => {
+                self.queue
+                    .push_back(Err(self.left.next().unwrap().unwrap_err()));
+                true
+            }
+            (_, Some(Err(_))) => {
+                self.queue
+                    .push_back(Err(self.right.next().unwrap().unwrap_err()));
+                true
+            }
+            (Some(Ok(l)), Some(Ok(r))) => {
+                let lk = join_key_value(l, &self.on);
+                let rk = join_key_value(r, &self.on);
+                match crate::model::cmp_values(&lk, &rk) {
+                    std::cmp::Ordering::Less => {
+                        let rec = self.left.next().unwrap().unwrap();
+                        if matches!(self.join_type, JoinType::Left | JoinType::Full) {
+                            self.queue.push_back(Ok(rec));
+                        }
+                        true
+                    }
+                    std::cmp::Ordering::Greater => {
+                        let rec = self.right.next().unwrap().unwrap();
+                        if matches!(self.join_type, JoinType::Right | JoinType::Full) {
+                            self.queue.push_back(Ok(rec));
+                        }
+                        true
+                    }
+                    std::cmp::Ordering::Equal => {
+                        let key = lk;
+                        let mut left_group = Vec::new();
+                        while let Some(Ok(rec)) = self.left.peek() {
+                            if crate::model::cmp_values(&join_key_value(rec, &self.on), &key)
+                                != std::cmp::Ordering::Equal
+                            {
+                                break;
+                            }
+                            left_group.push(self.left.next().unwrap().unwrap());
+                        }
+                        let mut right_group = Vec::new();
+                        while let Some(Ok(rec)) = self.right.peek() {
+                            if crate::model::cmp_values(&join_key_value(rec, &self.on), &key)
+                                != std::cmp::Ordering::Equal
+                            {
+                                break;
+                            }
+                            right_group.push(self.right.next().unwrap().unwrap());
+                        }
+                        for l in &left_group {
+                            for r in &right_group {
+                                let mut merged = l.clone();
+                                for (k, v) in r {
+                                    if k != &self.on {
+                                        merged.insert(k.clone(), v.clone());
+                                    }
+                                }
+                                self.queue.push_back(Ok(merged));
+                            }
+                        }
+                        true
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl<'a> Iterator for MergeJoinIter<'a> {
+    type Item = anyhow::Result<Record>;
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(item) = self.queue.pop_front() {
+                return Some(item);
+            }
+            if !self.step() {
+                return None;
+            }
+        }
     }
 }
 
@@ -1856,6 +2046,222 @@ mod tests {
         let out = collect_ok(stage.process(input));
         assert_eq!(out.len(), 2);
     }
+
+    // --- merge join (join --merge) ---
+
+    fn merge_join_stage(join_type: JoinType, right: Vec<Record>) -> MergeJoinStage {
+        // MergeJoinStage requires its right-hand stream to already be
+        // sorted by the join key (the production code path guarantees this
+        // via external_sort before construction) - genuinely sort it here
+        // too, rather than assuming test data happens to already be in the
+        // right order. Note lexicographic string order isn't the same as
+        // numeric order (e.g. "10" < "2"), which is exactly the assumption
+        // an earlier, buggy version of this helper silently violated.
+        let right_stream: RecordStream<'static> = Box::new(right.into_iter().map(Ok));
+        let right_sorted = external_sort(right_stream, "id".to_string(), false);
+        MergeJoinStage::new("id".to_string(), join_type, right_sorted)
+    }
+
+    #[test]
+    fn merge_join_left_matches_hash_join_for_unique_keys() {
+        let left = stream(vec![
+            rec(&[
+                ("id", Value::String("1".to_string())),
+                ("order", Value::Integer(100)),
+            ]),
+            rec(&[
+                ("id", Value::String("2".to_string())),
+                ("order", Value::Integer(200)),
+            ]),
+            rec(&[
+                ("id", Value::String("4".to_string())),
+                ("order", Value::Integer(400)),
+            ]),
+        ]);
+        let right = vec![
+            rec(&[
+                ("id", Value::String("1".to_string())),
+                ("name", Value::String("Alice".to_string())),
+            ]),
+            rec(&[
+                ("id", Value::String("2".to_string())),
+                ("name", Value::String("Bob".to_string())),
+            ]),
+            rec(&[
+                ("id", Value::String("3".to_string())),
+                ("name", Value::String("Carol".to_string())),
+            ]),
+        ];
+        let stage = merge_join_stage(JoinType::Left, right);
+        let out = collect_ok(stage.process(left));
+        assert_eq!(out.len(), 3);
+        let by_id = |id: &str| {
+            out.iter()
+                .find(|r| r.get("id") == Some(&Value::String(id.to_string())))
+                .unwrap()
+        };
+        assert_eq!(
+            by_id("1").get("name"),
+            Some(&Value::String("Alice".to_string()))
+        );
+        assert_eq!(by_id("4").get("name"), None);
+    }
+
+    #[test]
+    fn merge_join_inner_drops_unmatched() {
+        let left = stream(vec![
+            rec(&[("id", Value::String("1".to_string()))]),
+            rec(&[("id", Value::String("999".to_string()))]),
+        ]);
+        let right = vec![rec(&[
+            ("id", Value::String("1".to_string())),
+            ("name", Value::String("Alice".to_string())),
+        ])];
+        let stage = merge_join_stage(JoinType::Inner, right);
+        let out = collect_ok(stage.process(left));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].get("id"), Some(&Value::String("1".to_string())));
+    }
+
+    #[test]
+    fn merge_join_right_appends_unmatched_right() {
+        let left = stream(vec![rec(&[("id", Value::String("1".to_string()))])]);
+        let right = vec![
+            rec(&[
+                ("id", Value::String("1".to_string())),
+                ("name", Value::String("Alice".to_string())),
+            ]),
+            rec(&[
+                ("id", Value::String("2".to_string())),
+                ("name", Value::String("Bob".to_string())),
+            ]),
+        ];
+        let stage = merge_join_stage(JoinType::Right, right);
+        let out = collect_ok(stage.process(left));
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[1].get("name"), Some(&Value::String("Bob".to_string())));
+    }
+
+    #[test]
+    fn merge_join_full_keeps_both_unmatched_sides() {
+        let left = stream(vec![
+            rec(&[("id", Value::String("1".to_string()))]),
+            rec(&[("id", Value::String("4".to_string()))]),
+        ]);
+        let right = vec![
+            rec(&[
+                ("id", Value::String("1".to_string())),
+                ("name", Value::String("Alice".to_string())),
+            ]),
+            rec(&[
+                ("id", Value::String("3".to_string())),
+                ("name", Value::String("Carol".to_string())),
+            ]),
+        ];
+        let stage = merge_join_stage(JoinType::Full, right);
+        let out = collect_ok(stage.process(left));
+        assert_eq!(out.len(), 3);
+    }
+
+    #[test]
+    fn merge_join_produces_cross_product_for_duplicate_right_keys() {
+        // Deliberately different from JoinStage's hash join, which keeps
+        // only the last right record for a duplicate key.
+        let left = stream(vec![rec(&[
+            ("id", Value::String("1".to_string())),
+            ("order", Value::Integer(100)),
+        ])]);
+        let right = vec![
+            rec(&[
+                ("id", Value::String("1".to_string())),
+                ("tag", Value::String("a".to_string())),
+            ]),
+            rec(&[
+                ("id", Value::String("1".to_string())),
+                ("tag", Value::String("b".to_string())),
+            ]),
+        ];
+        let stage = merge_join_stage(JoinType::Inner, right);
+        let out = collect_ok(stage.process(left));
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].get("tag"), Some(&Value::String("a".to_string())));
+        assert_eq!(out[1].get("tag"), Some(&Value::String("b".to_string())));
+    }
+
+    #[test]
+    fn merge_join_produces_cross_product_for_duplicate_left_keys() {
+        let left = stream(vec![
+            rec(&[
+                ("id", Value::String("1".to_string())),
+                ("x", Value::String("p".to_string())),
+            ]),
+            rec(&[
+                ("id", Value::String("1".to_string())),
+                ("x", Value::String("q".to_string())),
+            ]),
+        ]);
+        let right = vec![rec(&[
+            ("id", Value::String("1".to_string())),
+            ("name", Value::String("Alice".to_string())),
+        ])];
+        let stage = merge_join_stage(JoinType::Inner, right);
+        let out = collect_ok(stage.process(left));
+        assert_eq!(out.len(), 2);
+        assert!(out
+            .iter()
+            .all(|r| r.get("name") == Some(&Value::String("Alice".to_string()))));
+    }
+
+    #[test]
+    fn merge_join_on_empty_left_stream() {
+        let left = stream(vec![]);
+        let right = vec![rec(&[("id", Value::String("1".to_string()))])];
+        let stage = merge_join_stage(JoinType::Full, right);
+        let out = collect_ok(stage.process(left));
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn merge_join_on_empty_right_stream() {
+        let left = stream(vec![rec(&[("id", Value::String("1".to_string()))])]);
+        let stage = merge_join_stage(JoinType::Left, vec![]);
+        let out = collect_ok(stage.process(left));
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn merge_join_at_scale_matches_every_record_exactly_once() {
+        // Exercises the external-merge-sort path on both sides (chunk size
+        // is 50_000) and confirms no records are lost or duplicated.
+        let n: i64 = 60_000;
+        let left_records: Vec<_> = (0..n)
+            .rev()
+            .map(|i| {
+                rec(&[
+                    ("id", Value::String(i.to_string())),
+                    ("v", Value::Integer(i)),
+                ])
+            })
+            .collect();
+        let right_records: Vec<_> = (0..n)
+            .map(|i| {
+                rec(&[
+                    ("id", Value::String(i.to_string())),
+                    ("name", Value::String(format!("n{i}"))),
+                ])
+            })
+            .collect();
+        let stage = merge_join_stage(JoinType::Inner, right_records);
+        let out = collect_ok(stage.process(stream(left_records)));
+        assert_eq!(out.len(), n as usize);
+    }
+
+    // Note: a test asserting error propagation through merge join's left
+    // side is deliberately not included here. `external_sort` (which both
+    // `sort` and merge join's left-side pre-sort rely on) has a known,
+    // pre-existing bug where it silently drops a malformed record instead
+    // of propagating it - tracked as a separate follow-up fix rather than
+    // scoped into this feature. Once that's fixed, this is worth adding.
 
     // --- rename / flatten / sample ---
 

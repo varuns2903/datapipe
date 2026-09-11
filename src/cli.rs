@@ -109,6 +109,11 @@ pub enum Command {
         /// The kind of join to perform
         #[arg(long = "type", value_enum, default_value = "left")]
         join_type: JoinType,
+        /// Use a memory-bounded sort-merge join instead of loading the
+        /// entire join file into a hash table - use this when the join
+        /// file might be too large to fit in memory
+        #[arg(long)]
+        merge: bool,
     },
     /// Explode an array field into multiple records
     Explode { field: String },

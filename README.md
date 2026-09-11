@@ -90,14 +90,16 @@ Run `dp <command> --help` for full details on any command below.
 - `limit <max>`: Halts the stream after yielding `N` records.
 - `explode <field>`: Expands an array-valued field into one record per element. Records where the field isn't an array pass through unchanged.
 - `map <field> <expression>`: Computes a new field (or overwrites an existing one) using an expression.
-- `join <file> --on <field> [--type <left|inner|right|full>]`: Joins each record with a matching record from `<file>` (JSONL or CSV) on the given field. Defaults to `left`. `<file>` is loaded entirely into memory as a hash table before the main stream starts, so memory usage is proportional to its size — fine for typical lookup-table-sized files, not bounded for huge ones.
+- `join <file> --on <field> [--type <left|inner|right|full>] [--merge]`: Joins each record with a matching record from `<file>` (JSONL or CSV) on the given field. Defaults to `left`. By default, `<file>` is loaded entirely into memory as a hash table before the main stream starts, so memory usage is proportional to its size — fine for typical lookup-table-sized files, not bounded for huge ones.
   - `left` (default): keeps every record from the main stream; merges in matching fields from `<file>` when found, otherwise passes the record through unchanged.
   - `inner`: keeps only records that have a match in `<file>`.
   - `right`: keeps only records that have a match, then appends any record from `<file>` that was never matched (with no fields from the main stream).
   - `full`: behaves like `left`, then also appends any unmatched record from `<file>` at the end (equivalent to left + the unmatched tail from right).
+  - `--merge`: uses a memory-bounded sort-merge join instead of the hash join — both sides are sorted by the join key first (the same external merge sort `sort` uses, spilling to temp files), so memory stays bounded regardless of `<file>`'s size. For a duplicate join key, `--merge` produces the full cross product of matching records (the textbook sort-merge behavior) rather than the hash join's last-write-wins, and its output comes out in join-key-sorted order rather than the main stream's original order.
 
   ```bash
   dp join customers.jsonl --on customer_id --type inner
+  dp join huge_lookup.jsonl --on id --merge
   ```
 - `inspect`: Passes the stream through unchanged — useful for debugging where in a pipeline something goes wrong.
 - `rename <old:new,...>`: Renames one or more fields, e.g. `dp rename user_name:name,ts:timestamp`. Fields not mentioned are left untouched; field order is preserved.

@@ -116,6 +116,8 @@ pub enum StageSpec {
         on: String,
         #[serde(default = "default_join_type")]
         join_type: JoinType,
+        #[serde(default)]
+        merge: bool,
     },
 }
 
@@ -161,10 +163,12 @@ pub fn into_command(spec: StageSpec) -> Command {
             file,
             on,
             join_type,
+            merge,
         } => Command::Join {
             file,
             on,
             join_type,
+            merge,
         },
     }
 }
@@ -295,6 +299,37 @@ mod tests {
         let file = parse(toml).unwrap();
         match &file.stages[0] {
             StageSpec::Join { join_type, .. } => assert_eq!(*join_type, JoinType::Inner),
+            _ => panic!("expected Join"),
+        }
+    }
+
+    #[test]
+    fn join_merge_defaults_to_false() {
+        let toml = r#"
+            [[stages]]
+            type = "join"
+            file = "right.jsonl"
+            on = "id"
+        "#;
+        let file = parse(toml).unwrap();
+        assert!(matches!(
+            file.stages[0],
+            StageSpec::Join { merge: false, .. }
+        ));
+    }
+
+    #[test]
+    fn join_merge_can_be_specified() {
+        let toml = r#"
+            [[stages]]
+            type = "join"
+            file = "right.jsonl"
+            on = "id"
+            merge = true
+        "#;
+        let file = parse(toml).unwrap();
+        match &file.stages[0] {
+            StageSpec::Join { merge, .. } => assert!(*merge),
             _ => panic!("expected Join"),
         }
     }
