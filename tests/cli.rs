@@ -733,6 +733,66 @@ fn test_sample_command_respects_n() {
 }
 
 #[test]
+fn test_sample_with_seed_is_reproducible() {
+    let stdin: String = (0..50).map(|i| format!("{{\"n\":{}}}\n", i)).collect();
+
+    let run = |stdin: String| {
+        let mut cmd = Command::cargo_bin("dp").unwrap();
+        let output = cmd
+            .arg("sample")
+            .arg("5")
+            .arg("--seed")
+            .arg("42")
+            .write_stdin(stdin)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        String::from_utf8(output).unwrap()
+    };
+
+    let first = run(stdin.clone());
+    let second = run(stdin);
+    assert_eq!(first, second);
+}
+
+#[test]
+fn test_run_pipeline_file_with_sample_seed() {
+    let dir = tempfile::tempdir().unwrap();
+    let pipeline_path = dir.path().join("pipeline.toml");
+    std::fs::write(
+        &pipeline_path,
+        r#"
+[[stages]]
+type = "sample"
+n = 5
+seed = 42
+"#,
+    )
+    .unwrap();
+    let stdin: String = (0..50).map(|i| format!("{{\"n\":{}}}\n", i)).collect();
+
+    let run = |stdin: String| {
+        let mut cmd = Command::cargo_bin("dp").unwrap();
+        let output = cmd
+            .arg("run")
+            .arg(dir.path().join("pipeline.toml").to_str().unwrap())
+            .write_stdin(stdin)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        String::from_utf8(output).unwrap()
+    };
+
+    let first = run(stdin.clone());
+    let second = run(stdin);
+    assert_eq!(first, second);
+}
+
+#[test]
 fn test_run_multi_stage_pipeline_file() {
     let dir = tempfile::tempdir().unwrap();
     let pipeline_path = dir.path().join("pipeline.toml");

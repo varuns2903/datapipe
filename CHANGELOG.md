@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `sample --seed <n>`: seeds the reservoir-sampling RNG for a
+  reproducible sample - the same seed and input always pick the same
+  records, which is exactly what you want when debugging or writing a
+  test around `sample`'s output. Without `--seed`, behavior is unchanged
+  (a genuinely different sample each run, via the OS-seeded default
+  RNG). Implemented via a small `SampleRng` enum wrapping either
+  `rand::rngs::StdRng::seed_from_u64` (when a seed is given) or the
+  default `ThreadRng` (when it isn't) behind one `random_range()` method,
+  since `Rng`'s generic methods aren't object-safe so a trait object
+  wasn't an option; `StdRng` is boxed inside the enum to keep it from
+  being sized to the larger of the two RNGs' state. Also available as a
+  pipeline-file setting (`seed` under a `sample` stage). Verified: unit
+  tests (same seed reproduces the exact sample, two different seeds
+  produce different samples) and CLI integration tests (reproducibility
+  via the CLI flag and via a `run` pipeline file).
 - `stats`: adds `median`/`p90`/`p99` (linear-interpolation percentiles,
   the numpy/pandas default convention) alongside the existing
   `count`/`nulls`/`distinct`/`min`/`max`/`mean`/`stddev`, `null` for

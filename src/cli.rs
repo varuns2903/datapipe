@@ -155,7 +155,13 @@ pub enum Command {
         sep: String,
     },
     /// Take a uniform random sample of N records (buffers up to N records)
-    Sample { n: usize },
+    Sample {
+        n: usize,
+        /// Seed the RNG for a reproducible sample - the same seed and
+        /// input always pick the same records, useful for tests/debugging
+        #[arg(long)]
+        seed: Option<u64>,
+    },
     /// Compute a new field or overwrite an existing one using an expression
     Map {
         field: String,

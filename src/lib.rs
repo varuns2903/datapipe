@@ -98,7 +98,7 @@ fn command_into_stage(command: Command, strict: bool) -> miette::Result<Option<B
             Box::new(RenameStage { renames: pairs })
         }
         Command::Flatten { sep } => Box::new(FlattenStage { separator: sep }),
-        Command::Sample { n } => Box::new(SampleStage { n }),
+        Command::Sample { n, seed } => Box::new(SampleStage { n, seed }),
         Command::Map {
             field,
             expression,

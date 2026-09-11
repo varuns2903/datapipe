@@ -1387,6 +1387,36 @@ impl Stage for FlattenStage {
 
 pub struct SampleStage {
     pub n: usize,
+    /// When set, seeds a deterministic RNG instead of the default
+    /// OS-seeded one, so repeated runs on the same input pick the exact
+    /// same sample - useful for reproducible tests/debugging, where
+    /// "which records got sampled" needs to be stable across runs.
+    pub seed: Option<u64>,
+}
+
+/// Wraps whichever RNG `SampleStage` ends up using so the sampling loop
+/// below doesn't need to know or care which one it got: `rand::rng()`
+/// (`ThreadRng`) and `StdRng::seed_from_u64` are different concrete
+/// types, and `Rng`'s generic methods aren't object-safe, so a trait
+/// object isn't an option - this enum is the simplest way to keep one
+/// code path for both.
+enum SampleRng {
+    // Boxed: StdRng's internal state is much larger than ThreadRng's,
+    // and this enum only ever exists as one instance per SampleStage
+    // invocation, so the indirection cost is irrelevant - it just keeps
+    // the enum itself from being sized to the larger variant.
+    Seeded(Box<rand::rngs::StdRng>),
+    Thread(rand::rngs::ThreadRng),
+}
+
+impl SampleRng {
+    fn random_range(&mut self, range: std::ops::Range<usize>) -> usize {
+        use rand::RngExt;
+        match self {
+            SampleRng::Seeded(r) => r.random_range(range),
+            SampleRng::Thread(r) => r.random_range(range),
+        }
+    }
 }
 
 impl Stage for SampleStage {
@@ -1394,8 +1424,11 @@ impl Stage for SampleStage {
         // Reservoir sampling (Algorithm R): a single streaming pass yields a
         // uniformly random sample of `n` records without knowing the total
         // stream length in advance, using O(n) memory.
-        use rand::RngExt;
-        let mut rng = rand::rng();
+        use rand::SeedableRng;
+        let mut rng = match self.seed {
+            Some(seed) => SampleRng::Seeded(Box::new(rand::rngs::StdRng::seed_from_u64(seed))),
+            None => SampleRng::Thread(rand::rng()),
+        };
         let mut reservoir: Vec<Record> = Vec::with_capacity(self.n);
 
         for (idx, res) in input.enumerate() {
@@ -3014,7 +3047,7 @@ mod tests {
     fn sample_yields_exactly_n_records_when_stream_is_larger() {
         let records: Vec<_> = (0..100).map(|i| rec(&[("n", Value::Integer(i))])).collect();
         let input = stream(records);
-        let stage = SampleStage { n: 10 };
+        let stage = SampleStage { n: 10, seed: None };
         let out = collect_ok(stage.process(input));
         assert_eq!(out.len(), 10);
     }
@@ -3025,7 +3058,7 @@ mod tests {
             rec(&[("a", Value::Integer(1))]),
             rec(&[("a", Value::Integer(2))]),
         ]);
-        let stage = SampleStage { n: 10 };
+        let stage = SampleStage { n: 10, seed: None };
         let out = collect_ok(stage.process(input));
         assert_eq!(out.len(), 2);
     }
@@ -3033,9 +3066,42 @@ mod tests {
     #[test]
     fn sample_of_zero_yields_nothing() {
         let input = stream(vec![rec(&[("a", Value::Integer(1))])]);
-        let stage = SampleStage { n: 0 };
+        let stage = SampleStage { n: 0, seed: None };
         let out = collect_ok(stage.process(input));
         assert_eq!(out.len(), 0);
+    }
+
+    #[test]
+    fn sample_same_seed_picks_the_same_records() {
+        let records: Vec<_> = (0..50).map(|i| rec(&[("n", Value::Integer(i))])).collect();
+        let run = || {
+            let input = stream(records.clone());
+            let stage = SampleStage {
+                n: 5,
+                seed: Some(42),
+            };
+            collect_ok(stage.process(input))
+        };
+        let first = run();
+        let second = run();
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn sample_different_seeds_can_pick_different_records() {
+        let records: Vec<_> = (0..50).map(|i| rec(&[("n", Value::Integer(i))])).collect();
+        let sample_with_seed = |seed: u64| {
+            let input = stream(records.clone());
+            let stage = SampleStage {
+                n: 5,
+                seed: Some(seed),
+            };
+            collect_ok(stage.process(input))
+        };
+        // Not a proof for all seeds, but two well-separated seeds on 50
+        // records essentially always disagree - a real regression (e.g.
+        // seed being ignored) would make this fail reliably.
+        assert_ne!(sample_with_seed(1), sample_with_seed(2));
     }
 
     // --- error propagation: aggregation stages must not silently drop/miscount

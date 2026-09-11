@@ -114,6 +114,8 @@ pub enum StageSpec {
     },
     Sample {
         n: usize,
+        #[serde(default)]
+        seed: Option<u64>,
     },
     Map {
         field: String,
@@ -168,7 +170,7 @@ pub fn into_command(spec: StageSpec) -> Command {
         StageSpec::Explode { field } => Command::Explode { field },
         StageSpec::Rename { renames } => Command::Rename { renames },
         StageSpec::Flatten { sep } => Command::Flatten { sep },
-        StageSpec::Sample { n } => Command::Sample { n },
+        StageSpec::Sample { n, seed } => Command::Sample { n, seed },
         StageSpec::Map {
             field,
             expression,
@@ -330,6 +332,35 @@ mod tests {
             }),
             Command::TopN { .. }
         ));
+    }
+
+    #[test]
+    fn parses_sample_stage_with_and_without_seed() {
+        let toml = r#"
+            [[stages]]
+            type = "sample"
+            n = 5
+            seed = 42
+        "#;
+        let file = parse(toml).unwrap();
+        match &file.stages[0] {
+            StageSpec::Sample { n, seed } => {
+                assert_eq!(*n, 5);
+                assert_eq!(*seed, Some(42));
+            }
+            _ => panic!("expected Sample stage"),
+        }
+
+        let toml = r#"
+            [[stages]]
+            type = "sample"
+            n = 5
+        "#;
+        let file = parse(toml).unwrap();
+        match &file.stages[0] {
+            StageSpec::Sample { seed, .. } => assert_eq!(*seed, None),
+            _ => panic!("expected Sample stage"),
+        }
     }
 
     #[test]
